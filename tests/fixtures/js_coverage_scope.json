@@ -37,6 +37,7 @@
     "tests/test_runs.py",
     "tests/test_steer_ui.py",
     "tests/test_status_pill_ui.py",
+    "tests/test_task_controls_ui.py",
     "tests/test_ui3_mode.py",
     "tests/test_ui_snapshots.py",
     "tests/test_uxfix.py"
