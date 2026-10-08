@@ -634,9 +634,10 @@ def _uv_lock_check(
     uv = shutil.which("uv")
     if uv is None:
         # check.sh runs uv itself (every `uv run` stage and its own `uv lock --check`),
-        # so it cannot pass without uv. The audit's sandbox hides it (it lives under
-        # HOME, with the package cache an offline check reads), so there this is a
-        # skip the audit lists as not proven, not a failure of every change.
+        # so it cannot pass without uv; on a machine without it this is a skip the
+        # audit lists as not proven, not a failure of every change. The audit's sandbox
+        # shows uv (saddle's `sandbox-expose`) but hides HOME, its package cache, and has
+        # no network: there a lock check the cache cannot serve skips in `run_uv`.
         pytest.skip("uv is not on PATH here; check.sh runs uv itself")
     for name in ("pyproject.toml", "uv.lock", "README.md", "LICENSE"):
         shutil.copy(ROOT / name, tmp_path / name)
