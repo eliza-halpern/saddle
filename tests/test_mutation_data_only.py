@@ -155,7 +155,14 @@ def test_a_table_of_named_constants_is_data_and_its_change_is_not_refused(
 
 
 @pytest.mark.parametrize(
-    "value", ["frozenset({CSS}) | {SQL}", "(*NAMES, SQL)", "{**{'.css': CSS}, '.sql': SQL}", "-1"]
+    "value",
+    [
+        "frozenset({CSS}) | {SQL}",
+        "(*NAMES, SQL)",
+        "{**{'.css': CSS}, '.sql': SQL}",
+        "-1",
+        "(CSS, SQL, languages.PYTHON)",  # a constant another module names
+    ],
 )
 def test_operators_and_unpacking_over_data_are_data(tmp_path: Path, value: str) -> None:
     head = TABLE_BASE.replace("NAMES: Final = frozenset({CSS})", f"NAMES: Final = {value}")
