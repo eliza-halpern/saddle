@@ -7,8 +7,9 @@ index, because the worktree belongs to a run that is still writing to it. The pa
 
 Known-bad: a new file missing (a plain `git diff <base>` leaves untracked files out); the
 run's own index or status changed by the read; another session's run, or a run with no
-worktree yet, answered as if it were there. Known-good: every changed file with its added
-lines, an ignored file left out, and the worktree byte for byte as it was.
+worktree yet, answered as if it were there; a diff git refuses answered as a server error.
+Known-good: every changed file with its added lines, an ignored file left out, the worktree
+byte for byte as it was, and git's refusal answered as a refusal in git's own words.
 """
 
 from __future__ import annotations
@@ -81,3 +82,19 @@ def test_the_endpoint_answers_for_its_own_live_run_only(tmp_path: Path) -> None:
     assert "live_change.py" in {f["path"] for f in got.json()["files"]}
     assert elsewhere.status_code == 404, elsewhere.text
     assert unknown.status_code == 404, unknown.text
+
+
+def test_a_live_diff_git_refuses_is_answered_as_a_refusal(tmp_path: Path) -> None:
+    repo, _base = _running(tmp_path / "repo")
+    store = SessionStore(tmp_path / "s")
+    sid = store.create(title="t", workdir=str(repo)).id
+    app = build_app(store, NoModel, default_workdir=repo)
+    run = TaskRun(run_id="r1", session_id=sid, task="t", time_budget_s=0, token_budget=0)
+    run.worktree, run.base, run.branch = repo, "no-such-commit", "saddle/auto/r1"
+    _server_of(app).tasks["r1"] = run
+    with TestClient(app) as client:
+        refused = client.get(f"/api/sessions/{sid}/tasks/r1/changes")
+    assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]
+    assert "no-such-commit" in said, said  # git's own words, naming what it could not read
+    assert "worktree yet" not in said, said
