@@ -46,7 +46,9 @@ from saddle.evidence import (
     git_diff,
     git_ls_files,
     materialize_baseline,
+    mutant_tests,
     mutation_sample,
+    mutmut_test_map,
     property_modules,
     pytest_scope,
     restore_baseline,
@@ -3138,9 +3140,211 @@ def test_real_mutmut_runs_each_mutant_against_only_the_tests_that_ran_its_functi
         test_files={"test_f.py", "test_g.py"},
         select_tests=("test_f.py::test_f_weak", "test_g.py::test_g"),
     )
-    statuses = {name: status for name, status, _show in outcome.mutant_detail}
+    statuses = {name: status for name, status, _show, _ in outcome.mutant_detail}
     assert {s for n, s in statuses.items() if ".x_f__" in n} == {"survived"}, outcome
     assert {s for n, s in statuses.items() if ".x_g__" in n} == {"killed"}, outcome
+
+
+# --- every sealed mutant names the tests that ran its function -----------------
+#
+# Contract: every `mutant_detail` entry carries `tests` -- the sorted pytest node
+# ids mutmut's stats pass ran against that mutant's function, that is
+# `tests_by_mangled_function_name` for the mutant's name without its
+# `__mutmut_<n>` suffix. It is that function's tests only: never every test in the
+# suite, never one list shared by every mutant, never the tests of one file.
+
+
+def _three_function_workdir(workdir: Path) -> None:
+    """Three functions, each reached by its own tests, one parametrized."""
+    (workdir / "calc.py").write_text(
+        "class Box:\n"  # 1
+        "    def get(self, k):\n"  # 2
+        "        return k + 1\n"  # 3
+        "\n\n"
+        "def add(a, b):\n"  # 6
+        "    return a + b\n"  # 7
+        "\n\n"
+        "def spare(x):\n"  # 10
+        "    return x * 2\n"  # 11
+    )
+    (workdir / "test_add.py").write_text(
+        'import pytest\n\nfrom calc import add\n\n\n@pytest.mark.parametrize("i", [1, 2])\n'
+        "def test_add(i):\n"
+        "    assert add(i, 1) == i + 1\n"
+    )
+    (workdir / "test_box.py").write_text(
+        "from calc import add, Box\n\n\ndef test_get():\n    assert Box().get(1) == 2\n"
+        "\n\ndef test_add_again():\n    assert add(3, 4) == 7\n"
+    )
+    (workdir / "test_far.py").write_text(
+        "from calc import spare\n\n\ndef test_far():\n    assert spare(2) == 4\n"
+    )
+
+
+ADD_TWO_FILES = (
+    "test_add.py::test_add[1]",
+    "test_add.py::test_add[2]",
+    "test_box.py::test_add_again",
+)
+SELECTED = (*ADD_TWO_FILES, "test_box.py::test_get", "test_far.py::test_far")
+
+
+def test_each_sealed_mutant_names_exactly_the_tests_that_ran_its_function(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good, on the enforcing engine: a method mutant (`xǁBoxǁget`, the name
+    mutmut mangles for a method) names the one test that ran the method; a function
+    mutant names its parametrized node ids, brackets and all, from two files; the
+    third function's mutant names the one test that ran it. Known-bad, three ways:
+    one list for every mutant, every selected test on each mutant, or the whole of
+    one test file -- the per-function lists make each fail."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    _three_function_workdir(workdir)
+    for argv in (["init", "-q"], ["add", "-A"]):
+        assert run_argv(["git", *argv], workdir) == 0
+    outcome = mutation_sample(
+        workdir,
+        {
+            (str(workdir / "calc.py"), 3),
+            (str(workdir / "calc.py"), 7),
+            (str(workdir / "calc.py"), 11),
+        },
+        10,
+        test_files={"test_add.py", "test_box.py", "test_far.py"},
+        select_tests=SELECTED,
+    )
+    names = {d[0]: d[3] for d in outcome.mutant_detail}
+    method = {n: t for n, t in names.items() if ".xǁBoxǁget__mutmut_" in n}
+    plain = {n: t for n, t in names.items() if ".x_add__mutmut_" in n}
+    other = {n: t for n, t in names.items() if ".x_spare__mutmut_" in n}
+    assert method, outcome.mutant_detail
+    assert plain, outcome.mutant_detail
+    assert other, outcome.mutant_detail
+    assert set(method.values()) == {("test_box.py::test_get",)}, method
+    assert set(plain.values()) == {ADD_TWO_FILES}, plain
+    assert set(other.values()) == {("test_far.py::test_far",)}, other
+    assert all(t == tuple(sorted(t)) for t in names.values()), names
+    # not one list shared by every mutant: three functions, three distinct lists
+    assert len(set(names.values())) == 3, names
+    assert all(set(t) != set(SELECTED) for t in names.values()), names  # not the whole selection
+    assert all("test_far.py::test_far" not in t for t in method.values()), method
+    assert all("test_box.py::test_get" not in t for t in plain.values()), plain
+
+
+def test_a_test_that_never_ran_a_function_is_not_named_by_that_functions_mutants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A selected test that ran neither mutated function is named by neither, and a
+    function no selected test ran has mutants that name no test at all -- until a
+    test that runs it is selected, when its mutants name that test and nothing
+    else. known-good both ways; the known-bad is the selection copied onto every
+    mutant, which would name test_far.py::test_far for all of them."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    _three_function_workdir(workdir)
+    (workdir / "test_extra.py").write_text(
+        "from calc import add\n\n\ndef test_more():\n    assert add(1, 1) == 2\n"
+    )
+    for argv in (["init", "-q"], ["add", "-A"]):
+        assert run_argv(["git", *argv], workdir) == 0
+    changed = {(str(workdir / "calc.py"), 3), (str(workdir / "calc.py"), 7)}
+    files = {"test_add.py", "test_box.py", "test_extra.py", "test_far.py"}
+
+    def sample(selection: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+        outcome = mutation_sample(workdir, changed, 10, test_files=files, select_tests=selection)
+        found = {d[0]: d[3] for d in outcome.mutant_detail}
+        assert [n for n in found if ".x_add__mutmut_" in n], outcome.mutant_detail
+        assert [n for n in found if ".xǁBoxǁget__mutmut_" in n], outcome.mutant_detail
+        assert all(".x_spare__mutmut_" not in n for n in found), found
+        return found
+
+    kept = sample(("test_add.py::test_add[1]", "test_extra.py::test_more", "test_far.py::test_far"))
+    assert {t for n, t in kept.items() if ".x_add__mutmut_" in n} == {
+        ("test_add.py::test_add[1]", "test_extra.py::test_more")
+    }, kept
+    assert {t for n, t in kept.items() if ".xǁBoxǁget__mutmut_" in n} == {()}, kept
+    assert all("test_far.py::test_far" not in t for t in kept.values()), kept
+
+    widened = sample(
+        (
+            "test_add.py::test_add[1]",
+            "test_extra.py::test_more",
+            "test_box.py::test_get",
+            "test_far.py::test_far",
+        )
+    )
+    assert {t for n, t in widened.items() if ".x_add__mutmut_" in n} == {
+        ("test_add.py::test_add[1]", "test_extra.py::test_more")
+    }, widened
+    assert {t for n, t in widened.items() if ".xǁBoxǁget__mutmut_" in n} == {
+        ("test_box.py::test_get",)
+    }, widened
+    assert all("test_far.py::test_far" not in t for t in widened.values()), widened
+
+
+def test_mutmut_test_map_reads_the_stats_record_and_says_nothing_when_it_is_absent(
+    tmp_path: Path,
+) -> None:
+    """Known-good: mutmut's own shape, its file, unsorted as it writes it.
+    Known-bad: no file, a file that is not JSON, and a file with no such record all
+    say nothing rather than every mutant having no test, or a crash."""
+    scratch = tmp_path / "scratch"
+    (scratch / "mutants").mkdir(parents=True)
+    good = scratch / "mutants" / "mutmut-stats.json"
+    good.write_text(
+        json.dumps(
+            {
+                "tests_by_mangled_function_name": {
+                    "calc.xǁBoxǁget": ["test_box.py::test_get"],
+                    "calc.x_add": ["test_add.py::test_add[2]", "test_add.py::test_add[1]"],
+                    "calc.x_spare": [],
+                }
+            }
+        )
+    )
+    assert mutmut_test_map(scratch) == {
+        "calc.xǁBoxǁget": ("test_box.py::test_get",),
+        "calc.x_add": ("test_add.py::test_add[1]", "test_add.py::test_add[2]"),
+        "calc.x_spare": (),
+    }
+    scratch2 = tmp_path / "no-run"
+    scratch2.mkdir()
+    assert mutmut_test_map(scratch2) == {}
+    bad = tmp_path / "bad"
+    (bad / "mutants").mkdir(parents=True)
+    (bad / "mutants" / "mutmut-stats.json").write_text("not json at all")
+    assert mutmut_test_map(bad) == {}
+    (bad / "mutants" / "mutmut-stats.json").write_text(json.dumps({"duration_by_test": {}}))
+    assert mutmut_test_map(bad) == {}
+    # A stats record that is not a mapping of tests at all is read as no record.
+    (bad / "mutants" / "mutmut-stats.json").write_text(json.dumps(["test_n.py::test_f"]))
+    assert mutmut_test_map(bad) == {}
+
+
+def test_mutant_tests_looks_a_mutant_up_by_its_function_not_by_its_number() -> None:
+    """Known-good: every mutant of one function gets that function's sorted list, a
+    method by its mangled name, brackets and all. Known-bad: a mutant whose function
+    was never recorded has no test named for it, and one recorded with none has none
+    -- never another mutant's list."""
+    recorded = {
+        "calc.xǁBoxǁget": ["test_box.py::test_get"],
+        "calc.x_add": ["test_add.py::test_add[2]", "test_add.py::test_add[1]"],
+        "calc.x_spare": [],
+    }
+    assert mutant_tests("calc.xǁBoxǁget__mutmut_1", recorded) == ("test_box.py::test_get",)
+    assert mutant_tests("calc.xǁBoxǁget__mutmut_12", recorded) == ("test_box.py::test_get",)
+    assert mutant_tests("calc.x_add__mutmut_2", recorded) == (
+        "test_add.py::test_add[1]",
+        "test_add.py::test_add[2]",
+    )
+    assert mutant_tests("calc.x_spare__mutmut_1", recorded) == ()
+    assert mutant_tests("calc.x_unrecorded__mutmut_1", recorded) == ()
+    # `__mutmut_` is stripped from the end of the name only: a function that holds
+    # it in its own name is looked up whole, not cut in half.
+    assert mutant_tests("calc.x_add__mutmut_2", {"calc.x_add__mutmut": ["t.py::a"]}) == ()
 
 
 def _commit_ruff_config(root: Path, name: str, text: str) -> None:

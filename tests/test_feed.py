@@ -1347,9 +1347,13 @@ def test_a_blocked_tier_2_names_only_the_unsanctioned_tier_1_failures(
 
 
 class DetailAuditor(FakeAuditor):
-    """Tier 2 carries one killed and one surviving mutant's detail."""
+    """Tier 2 carries one killed and one surviving mutant's detail, each naming
+    the tests that ran its function (only the killed one has any)."""
 
-    DETAIL = (("m1", "killed", "-    return a - b\n+    return a + b"), ("m2", "survived", "x"))
+    DETAIL = (
+        ("m1", "killed", "-    return a - b\n+    return a + b", ("test_n.py::test_f",)),
+        ("m2", "survived", "x", ("test_n.py::test_g",)),
+    )
 
     def tier2(self, tree: Path | None = None) -> Findings:
         found = self._findings(2, tree)
@@ -1364,8 +1368,13 @@ def test_the_finish_audit_record_carries_every_scored_mutants_detail(repo: Path)
     record = fed.last()
     assert record is not None
     assert record["mutant_detail"] == [
-        {"name": "m1", "status": "killed", "show": "-    return a - b\n+    return a + b"},
-        {"name": "m2", "status": "survived", "show": "x"},
+        {
+            "name": "m1",
+            "status": "killed",
+            "show": "-    return a - b\n+    return a + b",
+            "tests": ["test_n.py::test_f"],
+        },
+        {"name": "m2", "status": "survived", "show": "x", "tests": ["test_n.py::test_g"]},
     ]
 
 
@@ -1503,7 +1512,7 @@ class Killing(DetailAuditor):
         self.audits += 1
         status = "survived" if self.audits == 1 else "killed"
         found = self._findings(2, tree)
-        detail = (("m1", "killed", "a"), ("m2", status, "b"))
+        detail = (("m1", "killed", "a", ("test_n.py::test_f",)), ("m2", status, "b", ()))
         return Findings(
             tier=2, key=f"k{self.audits}", findings=found.findings, mutant_detail=detail
         )

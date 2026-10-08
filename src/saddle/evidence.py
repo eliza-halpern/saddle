@@ -1761,7 +1761,10 @@ def scoped_targets(targets: Collection[str], scope: Collection[str]) -> tuple[st
     return tuple(kept)
 
 
-type MutantDetail = tuple[str, str, str]  # (name, status, mutmut show text)
+type MutantDetail = tuple[str, str, str, tuple[str, ...]]
+"""(name, status, mutmut show text, the tests that ran the mutated function) for one
+scored mutant. The tests are mutmut's own record for that function, sorted; a mutant
+whose function no test ran has none."""
 type SurvivorDetail = tuple[str, str, str, int, str, bool]
 """(name, status, path, line, mutation text, message-only) of one survivor."""
 
@@ -1810,9 +1813,11 @@ class MutationOutcome:
     # JSON (`audit.AuditResult.to_dict`), so `--tier2 score` is unchanged.
     survivor_details: tuple[SurvivorDetail, ...] = field(default=(), compare=False)
     mutant_detail: tuple[MutantDetail, ...] = field(default=(), compare=False)
-    """(name, status, mutmut show text) for EVERY scored mutant, killed ones
+    """(name, status, mutmut show text, tests) for EVERY scored mutant, killed ones
     included, in name order; a mutant mutmut never scored (`not checked`) or
-    that is not in `total` has none. Recording only: no verdict reads it."""
+    that is not in `total` has none. `tests` is what mutmut's stats pass ran the
+    mutated function under (`mutmut_test_map`), so a mutant whose function no
+    test reached carries an empty one. Recording only: no verdict reads it."""
     budget_spent: bool = False
     """The run hit `mutation_sample`'s time budget, so `total` counts only the
     mutants decided before it; with `total == 0` nothing was decided at all
@@ -2826,6 +2831,45 @@ def show_all_mutants(scratch: Path, *, recorder: SpanRecorder | None = None) -> 
     return mapping
 
 
+_MUTMUT_STATS_FILE: Final = "mutants/mutmut-stats.json"
+
+
+def mutmut_test_map(scratch: Path) -> dict[str, tuple[str, ...]]:
+    """mutmut's stats pass as {mangled function name: the tests that ran it}, sorted.
+
+    Read from `_MUTMUT_STATS_FILE` under `scratch`: what mutmut writes at the end
+    of its stats pass (`tests_by_mangled_function_name`) and what it then uses to
+    pick which tests each mutant runs (`estimated_worst_case_time` and the mutant
+    loop in its own `__main__` read the same table). Empty when the scratch holds
+    no such file or it cannot be read -- a stubbed engine, a run that died before
+    the stats pass: the mutants then name no tests, which is the absence of a
+    record, never a claim that no test ran.
+    """
+    try:
+        data = json.loads((scratch / _MUTMUT_STATS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    recorded = data.get("tests_by_mangled_function_name") if isinstance(data, dict) else None
+    if not isinstance(recorded, dict):
+        return {}
+    return {
+        str(name): tuple(sorted(str(test) for test in tests)) for name, tests in recorded.items()
+    }
+
+
+def mutant_tests(name: str, tests_by_function: Mapping[str, Collection[str]]) -> tuple[str, ...]:
+    """The sorted tests mutmut's stats pass ran against the function `name` mutates.
+
+    A mutant is `<module>.x_<fn>__mutmut_<n>` or `<module>.xǁ<Class>ǁ<method>__mutmut_<n>`
+    (`_MUTANT_NAME`), and mutmut looks its function up by the very same name minus
+    the `__mutmut_<n>` suffix (`mangled_name_from_mutant_name`), so this is the list
+    that drove the mutant's own pytest run: mutants of one function share it, and a
+    test that never ran that function is not in it, whoever else ran. Empty when the
+    function was recorded with no test, or the record is missing.
+    """
+    return tuple(sorted(tests_by_function.get(name.partition("__mutmut_")[0], ())))
+
+
 _PYTEST_SUMMARY: Final = re.compile(r"(\d+) passed\b[^\n]*? in (\d+(?:\.\d+)?)s")
 
 
@@ -2918,6 +2962,9 @@ def mutation_sample(
     statuses, `not checked` stays undecided, and everything else --
     `no tests` included -- is a survivor; `no tests` ones are also
     counted in `MutationOutcome.untested`.
+    Every `mutant_detail` row names the tests mutmut's stats pass ran the
+    mutated function under (`mutmut_test_map`, `mutant_tests`), so a later reader
+    can tell a test that killed something from one that never reached it.
     """
     if not changed:
         return MutationOutcome(killed=0, total=0, generated=0, survivors=())
@@ -3049,6 +3096,7 @@ def mutation_sample(
             )
         results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
         verdicts = _parse_mutant_verdicts(results.stdout)
+        stats = mutmut_test_map(scratch)
         try:
             shows = show_all_mutants(scratch, recorder=recorder)
         except MutantLookupError as exc:
@@ -3141,7 +3189,10 @@ def mutation_sample(
         untested=untested,
         statuses=tuple(sorted(status_tally.items())),
         survivor_details=details,
-        mutant_detail=tuple((name, verdict, shown[name]) for name, verdict, _, _ in sample),
+        mutant_detail=tuple(
+            (name, verdict, shown[name], mutant_tests(name, stats))
+            for name, verdict, _, _ in sample
+        ),
         budget_spent=ran.exit_code == SHELL_TIMEOUT,
     )
 
