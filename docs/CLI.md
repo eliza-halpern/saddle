@@ -33,6 +33,27 @@ OK: http://127.0.0.1:18020/v1 serves my-model (models: my-model)
 The source is one of `from flag --base-url`, `from environment SADDLE_BASE_URL`,
 `from file <path>` or `built-in default` (and the same for `--model`).
 
+## Counting tokens on a server without /tokenize
+
+saddle keeps its limits in tokens: how much of a command's output or a file a result
+may hold, when the context is compacted, how many tokens a reply may use. The server
+counts them (`/tokenize`), with the model's own tokenizer and chat template. A server
+that serves no /tokenize (Strata, for one) leaves them uncounted, and the limits fall
+back to line counts, so a few very long lines (a minified file, a source map) can
+fill the context in one result.
+
+Name the served model's tokenizer, a Hugging Face `tokenizer.json`, in
+`SADDLE_TOKENIZER`, and install the `tokenizer` extra (`saddle[tokenizer]`). saddle
+still asks the server first; when it answers no count, saddle counts with that
+tokenizer, over the messages framed as the model's chat template frames them. Each
+message's content counts as the server would count it; a whole prompt can differ by
+the few tokens the template adds around the messages. A message holding an image is
+not counted locally.
+
+A name that is set but cannot be used (a missing file, a file that is no tokenizer,
+the extra not installed) stops saddle at the start with the reason. It never falls
+back to an uncounted run.
+
 ## The test time limit
 
 Every time the auditor runs the project's tests, the run gets a time limit: in

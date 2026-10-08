@@ -30,6 +30,7 @@ from typing import Any, Final
 import httpx
 
 from saddle.dag import dag_json_schema
+from saddle.tokencount import LocalTokenizer
 
 DEFAULT_BASE_URL: Final = "http://127.0.0.1:18020/v1"
 DEFAULT_MODEL: Final = "qwen3.8-27b"
@@ -730,11 +731,16 @@ class VllmClient:
         model: str = DEFAULT_MODEL,
         timeout: float = DEFAULT_TIMEOUT,
         transport: httpx.BaseTransport | None = None,
+        tokenizer: LocalTokenizer | None = None,
     ) -> None:
         if not api_key:
             msg = "api_key must not be empty"
             raise ValueError(msg)
         self._model = model
+        # The served model's own tokenizer for a server that counts none
+        # (`count_tokens`): the one passed, else the one SADDLE_TOKENIZER names,
+        # which stops saddle here when it is set and cannot be loaded.
+        self._local = tokenizer if tokenizer is not None else LocalTokenizer.from_env()
         self._constrains = False
         self._client = httpx.Client(
             base_url=base_url,
@@ -1020,8 +1026,10 @@ class VllmClient:
 
         `tools` matters: the schemas are rendered into the prompt by the chat
         template, and on this server they are 874 of the 948 tokens a small
-        request costs. Returns None if the server does not serve /tokenize,
-        so the caller can fall back rather than fail.
+        request costs. A server that does not serve /tokenize (Strata) is
+        counted with the model's own tokenizer when SADDLE_TOKENIZER names it
+        (`tokencount`); without one this returns None, so the caller can fall
+        back rather than fail.
         """
         payload: dict[str, Any] = {
             "model": self._model,
@@ -1035,12 +1043,12 @@ class VllmClient:
                 json=payload,
                 timeout=PREFLIGHT_TIMEOUT,
             )
-            if response.status_code != httpx.codes.OK:
-                return None
-            count = response.json().get("count")
+            count = response.json().get("count") if response.status_code == httpx.codes.OK else None
         except (httpx.HTTPError, ValueError):
-            return None
-        return count if isinstance(count, int) else None
+            count = None
+        if isinstance(count, int):
+            return count
+        return self._local.count(messages, tools=tools) if self._local is not None else None
 
     def close(self) -> None:
         self._client.close()

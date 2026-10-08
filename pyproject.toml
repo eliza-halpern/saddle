@@ -37,6 +37,10 @@ sql = ["sqlglot==30.21.0", "sqlfluff==4.4.0"]
 # YAML checks for `saddle yaml-check` (PyYAML parses, jsonschema validates a
 # document against a schema the project names). Optional.
 yaml = ["pyyaml>=6.0.3", "jsonschema>=4.26.0"]
+# Token counting with the model's own tokenizer (`saddle.tokencount`) for a server
+# that counts none (Strata serves no /tokenize): `SADDLE_TOKENIZER` names its
+# tokenizer.json. Optional: without it, such a server leaves token limits uncounted.
+tokenizer = ["tokenizers==0.22.2"]
 
 [dependency-groups]
 dev = [
@@ -53,6 +57,7 @@ dev = [
     "sqlglot==30.21.0",
     "shellcheck-py>=0.11.0.1",
     "taplo>=0.9.3",
+    "tokenizers==0.22.2",
 ]
 
 [project.scripts]
