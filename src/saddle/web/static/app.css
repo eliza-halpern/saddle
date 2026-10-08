@@ -501,9 +501,14 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
 }
 
 @media (max-width: 420px) {
-  /* The send button already says busy. "needs you" is the one state that
-     asks for you, so it stays. */
+  /* The send button already says busy. "needs you" is the one state that asks
+     for you, so it stays. In a task session what else stays is whatever its
+     pill is holding (#85 item 3): the card scrolled away, and this is the only
+     place left that says "stopped", "no outcome" or the "stopping…" its own
+     Stop button asked for. A pill the page said nothing with keeps its hidden
+     face, so it takes up none of this narrow row. */
   .status:not(.needs) { display: none; }
+  body[data-mode="task"] .status:not([hidden]) { display: block; }
 }
 
 /* A run needs you in a session that is not on screen: on a phone the
