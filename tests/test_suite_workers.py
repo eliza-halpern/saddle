@@ -1222,7 +1222,8 @@ NEEDS_QUIET: Final = (
 """Fails on any xdist worker, passes alone: a test that needs the suite quiet."""
 
 BROKEN: Final = "from pkg.calc import add\n\n\ndef test_broken():\n    assert add(1, 1) == 3\n"
-"""Fails alone too: the change's to fix."""
+"""Fails alone too, and on the baseline, where it is committed: named as failing
+before the change (#174), never as passing alone."""
 
 BROKEN_ID: Final = "tests/test_broken.py::test_broken"
 

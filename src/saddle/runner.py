@@ -191,6 +191,55 @@ fails alone is never named here, so a test the change broke still reads as the
 change's."""
 
 
+BASELINE_FAILS: Final = (
+    "; {n} of them fail on the starting commit too, rerun alone there before the "
+    "change: {names}. The change did not break them; the verdict stands until the "
+    "suite passes"
+)
+"""What the `tests` finding adds for failing tests that also fail on the untouched
+baseline tree (#174): a run cannot tell a failure it caused from one the project
+already had, and spent its time on tests its change never touched. A test that
+passes on the baseline is never named here, so a test the change broke still
+reads as the change's; one the change added has no baseline file and is never
+asked about."""
+
+
+def _failing_at_baseline(
+    mode: SuiteRun,
+    node: Node,
+    base: Path,
+    failing: Sequence[str],
+    *,
+    recorder: SpanRecorder | None,
+    timeout: float | None,
+) -> list[str]:
+    """Of `failing`, the tests that fail too when their files are rerun alone on
+    the untouched baseline tree `base`.
+
+    Nothing for a test node (its tests are meant to fail), for none or too many
+    failing tests, or when no failing test's file existed at the baseline. A test
+    is named only when the rerun's own output shows it failing there: a rerun
+    that could not run a file (an import error, a hang) names none of its tests.
+    Unlike `_passed_alone`, whose "passed" is read from a failure's absence, this
+    reads a failure's presence, so a run cut short can only name too few."""
+    if node.kind == "test" or not 0 < len(failing) <= RERUN_ALONE_MAX:
+        return []
+    files = sorted({f for f in (t.split("::", 1)[0] for t in failing) if (base / f).is_file()})
+    if not files:
+        return []
+    command = mode.alone(node.deterministic_gate.test_command, files)
+    rerun = run_shell_capture(command, base, recorder=recorder, timeout=timeout)
+    there = set(failing_tests(rerun.stdout + rerun.stderr))
+    return [t for t in failing if t in there]
+
+
+def _with_baseline_fails(check: GateCheck, at_baseline: Sequence[str]) -> GateCheck:
+    if not at_baseline:
+        return check
+    said = BASELINE_FAILS.format(n=len(at_baseline), names=", ".join(at_baseline))
+    return replace(check, detail=f"{check.detail}{said}")
+
+
 def carry_test_code(workdir: Path, dest: Path, touched: Collection[str]) -> None:
     """Put the change's test code into the pre-change tree `dest` as the change
     left it: every file of `touched` that `is_test_code` says is test code, a
@@ -386,6 +435,13 @@ def run_node_gate(
         if current_exit != 0
         else []
     )
+    # What still fails alone, asked of the baseline below, before red-phase writes
+    # into its tree (#174).
+    still_failing = (
+        [t for t in failing_tests(suite.stdout + suite.stderr) if t not in passed_alone]
+        if current_exit != 0
+        else []
+    )
     covered = covered_lines(data_file, changed_files)
     # The tests that ran a changed line are all a changed-line mutant can
     # meet, so mutmut runs those, not the whole scope (tier 2 only).
@@ -402,6 +458,10 @@ def run_node_gate(
         at_baseline = [rel for rel in ruff_files if (dest / rel).exists()]
         baseline_findings = (
             ruff_findings(dest, at_baseline, recorder=recorder)[1] if at_baseline else []
+        )
+        # The failing tests' baseline leg, on the same untouched tree (#174).
+        failed_before = _failing_at_baseline(
+            mode, node, dest, still_failing, recorder=recorder, timeout=test_timeout
         )
         baseline_tests = read_sources(dest, "test_*.py") | read_sources(dest, "*_test.py")
         # Captured before the two loops below write into `dest`: the check
@@ -658,12 +718,15 @@ def run_node_gate(
     ran = IMPACT_RAN.format(ran=len(test_sources) - len(skipped), of=len(test_sources))
     checks = tuple(
         _with_suite_run(
-            _with_load_only(
-                replace(check, detail=f"{check.detail}; {ran}")
-                if command != gate.test_command
-                else check,
-                passed_alone,
-                mode,
+            _with_baseline_fails(
+                _with_load_only(
+                    replace(check, detail=f"{check.detail}; {ran}")
+                    if command != gate.test_command
+                    else check,
+                    passed_alone,
+                    mode,
+                ),
+                failed_before,
             ),
             mode,
         )
