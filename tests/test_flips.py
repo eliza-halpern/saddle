@@ -455,6 +455,61 @@ def test_a_flip_line_may_be_an_item_of_a_markdown_list() -> None:
         assert tc.parse_flips(unlabelled, {"adds"}) == {}
 
 
+def test_a_flip_line_may_name_a_test_by_its_pytest_node_id() -> None:
+    """#80a1 r2 labelled all nine of its changed tests this way, each with evidence."""
+    message = (
+        "flip: tests/test_feed.py::test_x -- the old row lacked `tests`\n"
+        "flip: tests/t.py::TestK::test_y -- a class part too\n"
+        'flip: "tests/t.py::test_z" -- quoted\n'
+    )
+    found = tc.parse_flips(message, {"test_x", "test_y", "test_z"})
+    assert found == {
+        "test_x": "the old row lacked `tests`",
+        "test_y": "a class part too",
+        "test_z": "quoted",
+    }
+    # the name after the path still has to be the test's own
+    assert tc.parse_flips("flip: tests/t.py::test_other -- x\n", {"test_x"}) == {}
+    assert tc.parse_flips("flip: tests/t.py::test_xy -- x\n", {"test_x"}) == {}
+
+
+def test_a_flip_line_that_labels_nothing_is_named_in_the_finding() -> None:
+    got = judge([CHANGE], "flip: tests/x.py::nope -- 2 + 3 is 5\nflip: elsewhere -- y\n")
+    assert got is not None
+    assert got.verdict == "fail"
+    assert (
+        "flip line(s) labelling no changed test here: 'tests/x.py::nope', 'elsewhere'" in got.detail
+    )
+    assert "[no flip line]" in got.detail  # the test it owes is still marked
+    labelled = judge([CHANGE], "flip: adds -- 2 + 3 is 5 and the old assertion said 4")
+    assert labelled is not None
+    assert "labelling no changed test" not in labelled.detail
+    # a node-id line that labels its test is never listed as a stray, even when the
+    # finish fails for another test
+    other = judge([CHANGE, OTHER], "flip: tests/x.py::adds -- 2 + 3 is 5, the old said 4")
+    assert other is not None
+    assert other.verdict == "fail"
+    assert "labelling no changed test" not in other.detail, other.detail
+
+
+def test_eighty_a1_r2s_labels_by_pytest_node_id_are_accepted() -> None:
+    """The shape #80a1 r2's first finish used for each of its changed tests."""
+    changes = [
+        ChangedTest("tests/test_feed.py", "test_record_rows", tc.BODY_CHANGED, "x"),
+        ChangedTest("tests/test_evidence.py", "test_seals_each_row", tc.BODY_CHANGED, "y"),
+    ]
+    message = (
+        "Summary.\n\n"
+        "flip: tests/test_feed.py::test_record_rows -- the sealed row now carries `tests`; "
+        "the old literal row omitted it\n"
+        "flip: tests/test_evidence.py::test_seals_each_row -- a mutant's row with no stats "
+        "record now reads `tests: []`, the old literal had no key\n"
+    )
+    got = judge(changes, message)
+    assert got is not None
+    assert got.verdict == "not-proven", got.detail
+
+
 def test_a_flip_line_with_no_evidence_maps_to_empty() -> None:
     assert tc.parse_flips("FLIP: adds\n", {"adds"}) == {"adds": ""}
 

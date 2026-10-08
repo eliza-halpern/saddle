@@ -710,6 +710,19 @@ def _other(path: str, head: str | None) -> ChangedTest:
 # A list bullet may lead the line: a summary written as a markdown list is still labelled.
 _FLIP_LINE: Final = re.compile(r"^\s*(?:[-*+]\s+)?flip:\s*(?P<rest>.*)$", re.IGNORECASE)
 _QUOTES: Final = "\"'`"
+_NODE_PREFIX: Final = re.compile(r"[\w./-]+\.py::(?:\w+::)*")
+"""A pytest node id's path and class part, before the test's own name."""
+
+
+def _bare(rest: str) -> str:
+    """`rest` with a pytest node id's path and class prefix taken off the name it starts
+    with (`tests/test_x.py::TestY::test_z -- ...` reads `test_z -- ...`), a quote kept.
+
+    #80a1 r2 labelled all nine of its changed tests as `flip: tests/x.py::test_y -- ...`,
+    each with evidence; the name had to be bare, so every line read "[no flip line]"."""
+    lead = rest[:1] if rest[:1] and rest[:1] in _QUOTES else ""
+    match = _NODE_PREFIX.match(rest, len(lead))
+    return lead + rest[match.end() :] if match is not None else rest
 
 
 def parse_flips(message: str, names: Collection[str]) -> dict[str, str]:
@@ -720,7 +733,8 @@ def parse_flips(message: str, names: Collection[str]) -> dict[str, str]:
     the longer wins, so `flip: parses a path -- ...` never answers for `parses`.
     The evidence is the rest of the line and the lines that follow it up to a blank
     line or the next `flip:` line (a wrapped commit message). A name with no line
-    is absent from the result; one whose line has no evidence maps to "".
+    is absent from the result; one whose line has no evidence maps to "". A test may
+    also be named by its pytest node id (`tests/x.py::test_y`, a class part too).
     """
     ordered = sorted(names, key=len, reverse=True)
     lines = message.splitlines()
@@ -729,7 +743,7 @@ def parse_flips(message: str, names: Collection[str]) -> dict[str, str]:
         match = _FLIP_LINE.match(line)
         if match is None:
             continue
-        rest = match.group("rest").strip()
+        rest = _bare(match.group("rest").strip())
         for name in ordered:
             tail = _after_name(rest, name)
             if tail is None:
@@ -742,6 +756,20 @@ def parse_flips(message: str, names: Collection[str]) -> dict[str, str]:
             found.setdefault(name, " ".join([tail, *more]).strip())
             break
     return found
+
+
+def unmatched_flips(message: str, names: Collection[str]) -> list[str]:
+    """What each `flip:` line that labels none of `names` names, as written: the text
+    before its ` -- ` (or the line's first 80 characters)."""
+    unmatched: list[str] = []
+    for line in message.splitlines():
+        match = _FLIP_LINE.match(line)
+        if match is None:
+            continue
+        rest = match.group("rest").strip()
+        if not any(_after_name(_bare(rest), name) is not None for name in names):
+            unmatched.append(rest.split(" -- ", 1)[0].strip()[:80])
+    return unmatched
 
 
 def _after_name(rest: str, name: str) -> str | None:
@@ -822,6 +850,13 @@ def judge(changes: list[ChangedTest], message: str) -> Judgement | None:
             f"{len(names)} pre-existing test(s) changed, "
             f"{len(unlabelled) + len(refused)} without a usable flip label. {FLIP_RULE}"
         ]
+        stray = unmatched_flips(message, names)
+        if stray:
+            lines.append(
+                "flip line(s) labelling no changed test here: "
+                + ", ".join(repr(s) for s in stray)
+                + ". Name each test exactly as quoted below (a pytest node id works too)."
+            )
         # The tests still owed a line come first, each marked before its detail, so a
         # reader who sees only the start of this text (the feed caps it) sees them.
         owed = [c for c in changes if c.name in refused or c.name in unlabelled]
