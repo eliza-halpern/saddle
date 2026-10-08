@@ -25,7 +25,7 @@ from browser_guard import BROWSER
 from packet_seed import GUARDED_SEEDED, git, make_repo, seed
 from test_ui3_mode import NoModel, serving
 
-from saddle.packet import compile_packet, render_packet_text
+from saddle.packet import compile_packet, plain_words, render_packet_text
 from saddle.sessions import SessionStore
 from saddle.web.app import build_app
 
@@ -88,7 +88,7 @@ def test_a_finished_packet_leads_with_the_band_and_folds_the_rest(tmp_path: Path
     # Mutation has no record, so the band is not all-green: "partial".
     assert r["band"] == "partial"
     assert r["firstRows"][0].startswith("prow s-observed k-scope")
-    assert r["audit"] == {"summary": "Audit1 of 1 passed", "open": False}
+    assert r["audit"] == {"summary": "Audit1 passed", "open": False}
     assert r["details"] == {
         "summary": "Details",
         "open": False,
@@ -118,12 +118,12 @@ def test_an_honest_stop_is_amber_lists_its_findings_and_cannot_merge(tmp_path: P
     not_proven = r["lines"][2]
     assert not_proven["tone"] == "warn"
     assert not_proven["glyph"] == "!"
-    assert "Unresolved at finish: coverage (evidence-thin)." in not_proven["items"]
+    assert "Unresolved at finish: coverage (the evidence is thin)." in not_proven["items"]
     assert r["merge"]["disabled"] is True
     assert "unproven" not in r["merge"]["text"]  # a disabled Merge drops the suffix
     assert r["why"].startswith("Merge is off: The run is stopped, not finished")
     assert r["discard"]["disabled"] is False
-    assert r["audit"]["summary"] == "Audit0 of 1 passed"
+    assert r["audit"]["summary"] == "Audit1 failed"
 
 
 def test_view_diff_shows_the_runs_files_inline(tmp_path: Path) -> None:
@@ -238,7 +238,7 @@ def test_edit_checks_are_their_own_line_not_in_the_audit_count(tmp_path: Path) -
     their own after it, and the Audit fold counts the one verdict it holds."""
     got, _repo, _branch = page(tmp_path, "edit-checked", "read")
     r = got["read"]
-    assert r["audit"]["summary"] == "Audit1 of 1 passed"
+    assert r["audit"]["summary"] == "Audit1 passed"
     assert len(r["firstRows"]) == 3
     assert r["firstRows"][0].startswith("prow s-observed k-scope")
     assert r["firstRows"][1].startswith("audit-fold s-proven")
@@ -290,7 +290,8 @@ def test_not_proven_draws_each_packet_md_item_once_and_no_bullet_is_empty(
     exactly its two packet.md items, with every fold open. Known-bad: an item
     drawn twice (the band's list and its row's list), or an empty bullet."""
     got, repo, _branch = page(tmp_path, kind, "not-proven")
-    expected = _report_items(repo, "Not proven")
+    # packet.md keeps the auditor's codes; the page says them in words (#85 item 5).
+    expected = [plain_words(item) for item in _report_items(repo, "Not proven")]
     if kind == "budget":
         assert expected == [
             "No auditor verdict: the suite, changed-line coverage and mutation were not "

@@ -94,6 +94,98 @@ NARRATIVE_LABEL: Final = "narrative, not evidence"
 TOKEN_SOURCES: Final = ("usage", "estimate", "mixed", "none")
 """How an outcome sidecar may say its tokens were counted; `_spend` words each one."""
 
+# -- the web packet's plain words (#85 item 5) --------------------------------------------
+# A person reads the web packet, so the auditor's own codes are spelled out there: a gate's
+# id, a reason code, an anchor status, a tier number, a findings ratio. The terminal packet,
+# packet.md and the chat recap keep the codes, which the docs, the auditor's findings and
+# the tests use. Spelled here, not read from the auditor: `packet` imports neither the
+# engine nor the auditor (tests/test_packet_plain_words.py holds this table to them).
+PLAIN_GATES: Final = {
+    "assertion-preservation": "assertion preservation",
+    "dead-code": "dead code",
+    "full-suite": "full suite",
+    "js-coverage": "JavaScript coverage",
+    "js-red-phase": "JavaScript red phase",
+    "js-tests": "JavaScript tests",
+    "node-scope": "node scope",
+    "not-measurable": "not measurable",
+    "project-gate": "project gate",
+    "prompt-effect": "prompt effect",
+    "property-coverage": "property coverage",
+    "public-deletions": "public deletions",
+    "red-phase": "red phase",
+    "requirement-binding": "requirement binding",
+    "skipped-tests": "skipped tests",
+    "static-check": "static check",
+    "target-scope": "target scope",
+    "task-requirements": "task requirements",
+}
+PLAIN_CODES: Final = {
+    "code-wrong": "the code is wrong",
+    "evidence-thin": "the evidence is thin",
+    "anchor-missing": "the branch carries no outcome anchor",
+    "anchor-mismatch": "the branch's outcome anchor names another outcome",
+}
+_PLAIN_VERDICTS: Final = {
+    "pass": "passed",
+    "fail": "failed",
+    "not-proven": "not proven",
+    "not-applicable": "does not apply",
+    "question": "asks you",
+    "blocked": "blocked",
+    "sanctioned": "sanctioned",
+}
+_PLAIN_PHRASES: Final = (
+    ("The tier-0 guard", "The edit guard"),
+    ("the tier-0 guard", "the edit guard"),
+    ("is a tier-2 audit", "is part of the full audit"),
+    ("Tier 0 checks", "Edit checks"),
+    (
+        "A check is tiers 0 and 1, and tier 2 too when it asks for mutation",
+        "A check runs the edit and checkpoint checks, and mutation too when it asks for it",
+    ),
+)
+# `<mark> <gate>: tier N, <verdict>: <detail>`, an audit line as `_audits` writes it.
+_PLAIN_TIER_LINE: Final = re.compile(
+    rf"([^\n:]+): tier [0-2], ({'|'.join(map(re.escape, _PLAIN_VERDICTS))}): "
+)
+_PLAIN_TIER_TAG: Final = re.compile(r" \(tier [0-2]\)")
+_PLAIN_FINDINGS: Final = re.compile(
+    r"\b(\d+) of (\d+) findings? passed((?:, \d+ (?:not proven|need you|sanctioned))*)\."
+)
+# A code standing as a word: not inside a longer id, a path or a file name ("red-phase.md").
+_PLAIN_CODE: Final = re.compile(
+    r"(?<![\w./-])("
+    + "|".join(map(re.escape, sorted({*PLAIN_CODES, *PLAIN_GATES}, key=len, reverse=True)))
+    + r")(?![\w/-]|\.\w)"
+)
+
+
+def _findings_in_words(found: re.Match[str]) -> str:
+    passed, total = int(found[1]), int(found[2])
+    others = [(int(n), what) for n, what in re.findall(r", (\d+) ([a-z ]+)", found[3])]
+    failed = total - passed - sum(n for n, _ in others)
+    parts = [f"{passed} passed"] if passed else []
+    parts += [f"{failed} failed"] if failed else []
+    parts += [f"{n} {what}" for n, what in others]
+    return f"Findings: {', '.join(parts)}." if parts else "No findings."
+
+
+def plain_words(text: str) -> str:
+    """`text` as the web packet shows it: the auditor's codes in words (#85 item 5).
+
+    "coverage (evidence-thin)" reads "coverage (the evidence is thin)", "0 of 1 finding
+    passed." reads "Findings: 1 failed.", "✓ dead-code: tier 1, pass: ..." reads
+    "✓ dead code passed: ...". A code inside a path or a longer name is left alone.
+    """
+    for old, new in _PLAIN_PHRASES:
+        text = text.replace(old, new)
+    text = _PLAIN_TIER_LINE.sub(lambda m: f"{m[1]} {_PLAIN_VERDICTS[m[2]]}: ", text)
+    text = _PLAIN_TIER_TAG.sub("", text)
+    text = _PLAIN_FINDINGS.sub(_findings_in_words, text)
+    return _PLAIN_CODE.sub(lambda m: {**PLAIN_CODES, **PLAIN_GATES}[m[1]], text)
+
+
 TEST_COMMAND: Final = re.compile(r"\b(pytest|py\.test|unittest|tox|nox|make\s+test|check\.sh)\b")
 
 # A sentence that asserts a check's result: a check noun and a result word in
@@ -184,17 +276,18 @@ class Packet:
             "run_id": self.run_id,
             "task": self.task,
             "verdict": self.verdict,
-            "verdict_text": self.verdict_text,
-            "header": list(self.header),
+            # The page is read by a person: the auditor's codes in words (#85 item 5).
+            "verdict_text": plain_words(self.verdict_text),
+            "header": [plain_words(h) for h in self.header],
             "rows": [
                 {
                     "key": row.key,
                     "title": row.title,
                     "status": row.status,
-                    "text": row.text,
+                    "text": plain_words(row.text),
                     "cites": list(row.cites),
-                    "items": list(row.items),
-                    **({"summary": row.summary} if row.summary else {}),
+                    "items": [plain_words(i) for i in row.items],
+                    **({"summary": plain_words(row.summary)} if row.summary else {}),
                 }
                 for row in self.rows
             ],

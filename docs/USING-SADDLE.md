@@ -478,6 +478,12 @@ in the packet".
 
 ### How the chat lays the packet out
 
+The page is sent the packet's text through `packet.plain_words`, so the auditor's own codes
+read as words there: a gate id ("dead code", not `dead-code`), a reason code ("coverage (the
+evidence is thin)"), an anchor status, a tier number ("the edit guard", "part of the full
+audit") and the findings count ("Findings: 12 passed, 4 not proven."). The terminal packet,
+`packet.md` and the chat recap keep the codes this page's tables use.
+
 The chat card does not show the rows above in table order (`static/tasks.js`,
 `renderPacket`). From the top:
 
@@ -519,7 +525,7 @@ The chat card does not show the rows above in table order (`static/tasks.js`,
    ✓, blue ("partial") for a finished run with any other line (a missing mutation
    record is the common case), red with a ✗, and amber for any stop, which lists its
    unresolved findings in the band itself.
-4. **Scope**, then **Audit** folded to "N of M passed".
+4. **Scope**, then **Audit** folded to its counts in words ("12 passed, 4 not proven").
 5. **Details** (folded): Contract, Narrative, Cost and Reproduce.
 
 Caveat found while writing this guide: the Reproduce command always says `main`. If

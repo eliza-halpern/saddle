@@ -890,7 +890,9 @@ function renderPacket(card, packet) {
     const fold = el("details", `audit-fold s-${audit.status}`);
     const summary = el("summary", "audit-summary");
     summary.appendChild(el("span", "prow-title", "Audit"));
-    summary.appendChild(el("span", "audit-count", audit.text.replace(/ findings?(?= passed)/, "").replace(/\.$/, "")));
+    // The row says "Findings: 12 passed, 4 not proven." (`packet.plain_words`); the fold's
+    // count is the part after the colon.
+    summary.appendChild(el("span", "audit-count", audit.text.replace(/^Findings: /, "").replace(/\.$/, "")));
     fold.appendChild(summary);
     fold.appendChild(packetRow(audit, packet));
     rows.appendChild(fold);
