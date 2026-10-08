@@ -499,7 +499,20 @@ def test_the_feed_prompt_states_the_flip_form_and_the_runs_own_refusal_cap(
 def test_the_prompt_says_how_to_undo_an_edit_git_cannot_restore(tmp_path: Path) -> None:
     client = Scripted([finish()])
     auto(_repo(tmp_path / "repo", src=False), client)
-    assert "copy the file to /tmp first and copy it back afterwards" in _system(client)
+    system = _system(client)
+    assert "copy the file to /tmp first and copy it back afterwards" in system
+    # ...without offering a hand-made mutation as the example: `check` with mutation
+    # set to true runs finish's own mutation, and #88 r2's /tmp loop restored a stale
+    # copy over its own fixes.
+    assert "(a mutation, say)" not in system
+
+
+def test_the_prompt_says_independent_reads_can_share_one_reply(tmp_path: Path) -> None:
+    """#88 r2 took 821 turns, nearly one tool call each, at about 16 s of the model
+    per turn; the engine runs every call of a reply (test_chat_engine)."""
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client)
+    assert "can go in one reply as several tool calls" in _system(client)
 
 
 def test_what_the_model_saves_in_tmp_evidence_outlives_the_run_and_is_listed(
