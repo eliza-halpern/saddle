@@ -758,9 +758,17 @@ def parse_flips(message: str, names: Collection[str]) -> dict[str, str]:
     return found
 
 
+_EVIDENCE_SEPARATOR: Final = re.compile(" -- |\\s*\u2014\\s*|\\s*\u2013\\s*| - |: ")
+"""What ends a flip line's label before its evidence: the dashes and the colon that
+`_after_name` accepts after a name, as written between the two. A node id's `::` has
+no space after it, and no test name holds a dash of either kind."""
+
+
 def unmatched_flips(message: str, names: Collection[str]) -> list[str]:
     """What each `flip:` line that labels none of `names` names, as written: the text
-    before its ` -- ` (or the line's first 80 characters)."""
+    before its evidence, whole. A label cut at a fixed length, or at the one separator
+    ` -- ` only, quoted a long name written before an em dash as a name it never gave
+    (#201)."""
     unmatched: list[str] = []
     for line in message.splitlines():
         match = _FLIP_LINE.match(line)
@@ -768,7 +776,7 @@ def unmatched_flips(message: str, names: Collection[str]) -> list[str]:
             continue
         rest = match.group("rest").strip()
         if not any(_after_name(_bare(rest), name) is not None for name in names):
-            unmatched.append(rest.split(" -- ", 1)[0].strip()[:80])
+            unmatched.append(_EVIDENCE_SEPARATOR.split(rest, maxsplit=1)[0].strip())
     return unmatched
 
 

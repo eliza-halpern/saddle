@@ -492,6 +492,21 @@ def test_a_flip_line_that_labels_nothing_is_named_in_the_finding() -> None:
     assert "labelling no changed test" not in other.detail, other.detail
 
 
+@pytest.mark.parametrize("dash", [" \u2014 ", "\u2014", " \u2013 ", ": "])
+def test_a_stray_flip_line_is_quoted_as_the_label_it_wrote_whatever_its_separator(
+    dash: str,
+) -> None:
+    """#201: #80a1 r3 wrote its flip lines with an em dash. A stray one was quoted
+    as its first 80 characters, a name it never gave."""
+    long = (
+        "tests/test_evidence.py::"
+        "test_real_mutmut_runs_each_mutant_against_only_the_tests_that_ran_its_function"
+    )
+    got = judge([CHANGE], f"flip: {long}{dash}unpack widened from 3 to 4 fields\n")
+    assert got is not None
+    assert f"flip line(s) labelling no changed test here: {long!r}." in got.detail
+
+
 def test_eighty_a1_r2s_labels_by_pytest_node_id_are_accepted() -> None:
     """The shape #80a1 r2's first finish used for each of its changed tests."""
     changes = [
