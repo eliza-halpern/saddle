@@ -146,6 +146,22 @@ FLIP_SAID: Final = "unchanged since {point}, which said it in full: the finish s
 
 NOTHING_TO_AUDIT: Final = "nothing to audit"
 
+WHOLE_SUITE_TOOK: Final = (
+    "This whole-suite check took {took}; finish runs the whole suite again on its own tree."
+)
+"""Ends a whole-suite check's answer: what the run paid for it. A dogfood run (#88
+r2) made 16 whole-suite checks at about 6 minutes each, 1.6 h of a 7.35 h run, while
+finish runs the suite itself; nothing it read said what one cost."""
+
+ONLY_FINISH_CLEARS: Final = (
+    "Nothing else fails: only your finish summary clears what is left. When the change "
+    "is done, call finish with a `flip:` line for each changed test."
+)
+"""Ends a check whose only failing findings are `test-changes`, the one finding no
+check can clear. #88 r2's tree was clean apart from it from its fifth whole-suite
+check on; it read "FAIL" at the top of each answer, checked twice more and polished
+for close to an hour before it called finish."""
+
 WHOLE_SUITE_UNSUPPORTED: Final = "this run's auditor cannot run the whole suite in a check"
 """Why a `check` with `whole_suite` decided nothing: blocked, never a narrowed
 run that the model would read as the whole suite's answer."""
@@ -941,6 +957,10 @@ class AuditFeed:
         self._dirty = False  # this tree is audited; no checkpoint of it too
         self.checks.append(result)
         text = render(self._shown(result))
+        if whole_suite:
+            text += "\n" + WHOLE_SUITE_TOOK.format(took=_took(result.duration_ms))
+        if _only_finish_clears(result):
+            text += "\n" + ONLY_FINISH_CLEARS
         span_id = uuid.uuid4().hex
         digest = write_attempt_sidecar(self.journal, span_id, result.to_dict())
         append_span(
@@ -1167,6 +1187,21 @@ class AuditFeed:
 
 P1_PENDING: Final = "examples pending: the task-text extraction has not finished"
 P1_UNFINISHED: Final = "the task-text extraction had not finished when finish was called"
+
+
+def _took(ms: int) -> str:
+    """`ms` as a person reads a duration: `48 s`, `6 min 12 s`."""
+    seconds = round(ms / 1000)
+    if seconds < 60:
+        return f"{seconds} s"
+    return f"{seconds // 60} min {seconds % 60} s"
+
+
+def _only_finish_clears(result: AuditResult) -> bool:
+    """Whether every failing finding of `result` is a `test-changes` one, which only the
+    finish summary clears; False when nothing fails."""
+    bad = [f for f in result.findings if failing(f)]
+    return bool(bad) and all(f.gate == TEST_CHANGES for f in bad)
 
 
 def _p1_finding(verdict: Literal["not-proven", "question"], detail: str) -> Finding:

@@ -18,6 +18,7 @@ The contract, each half both ways:
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import subprocess
@@ -28,10 +29,16 @@ from typing import Any, cast
 import pytest
 
 from saddle import cli
-from saddle.auditor import Finding, Findings
+from saddle.auditor import TEST_CHANGES, Finding, Findings
 from saddle.auto import CHECK_PROMPT, AutoError, AutoOptions, AutoResult, run_auto
 from saddle.engine import AUDIT_UNRESOLVED, FINISH_REFUSED
-from saddle.feed import CHECK_SPAN, CHECK_UNCHANGED
+from saddle.feed import (
+    CHECK_SPAN,
+    CHECK_UNCHANGED,
+    ONLY_FINISH_CLEARS,
+    WHOLE_SUITE_TOOK,
+    _took,
+)
 from saddle.journal import attempt_sidecar_path, read_spans, verify_journal
 from saddle.packet import compile_packet
 from saddle.tools import CHECK_TOOL
@@ -644,3 +651,71 @@ def test_check_and_finish_spans_record_how_long_their_audit_took(repo: Path, slo
     else:
         assert checked.duration_ms < floor
         assert finished.duration_ms < floor
+
+
+# -- what a check costs, and when only finish is left (#88 r2) --------------------
+
+
+class Reading(Scripted):
+    """A Scripted client that keeps each tool result it was sent, by call id: the
+    text the model read, which the ledger seals cut to its span cap."""
+
+    def __init__(self, rounds: list[list[ToolCall]]) -> None:
+        super().__init__(rounds)
+        self.read: dict[str, str] = {}
+
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Any:
+        for m in messages:
+            if m.get("role") == "tool":
+                self.read[str(m.get("tool_call_id"))] = str(m.get("content"))
+        return super().stream_chat(messages, **kwargs)
+
+
+def test_a_whole_suite_check_says_what_it_cost_and_a_narrowed_one_does_not(repo: Path) -> None:
+    client = Reading([[edit("e", "a - b", "a + b")], [WHOLE], [CHECK]])
+    result, _ = run(repo, client, auditor=WholeSuiteAuditor())
+    whole, narrowed = client.read["w"], client.read["k"]
+    took = _took(check_spans(result)[0].duration_ms)
+    assert whole.endswith(WHOLE_SUITE_TOOK.format(took=took)), whole
+    assert "whole-suite check took" not in narrowed, narrowed
+
+
+@pytest.mark.parametrize(
+    ("ms", "said"),
+    [(0, "0 s"), (48_400, "48 s"), (59_600, "1 min 0 s"), (372_000, "6 min 12 s")],
+)
+def test_a_duration_reads_in_minutes_and_seconds(ms: int, said: str) -> None:
+    assert _took(ms) == said
+
+
+class ChangedTestAuditor(FakeAuditor):
+    """A FakeAuditor whose tier 1 also fails `test-changes`, the finding only finish's
+    summary clears."""
+
+    def tier1(self, tree: Path | None = None) -> Findings:
+        found = super().tier1(tree)
+        changed = Finding(
+            TEST_CHANGES, 1, "fail", "evidence-thin", "tests/test_calc.py: changed", ("fake",)
+        )
+        return dataclasses.replace(found, findings=(*found.findings, changed))
+
+
+def test_a_check_failing_only_what_finish_clears_says_to_finish(repo: Path) -> None:
+    client = Reading([[edit("e", "a - b", "a + b")], [CHECK]])
+    run(repo, client, auditor=ChangedTestAuditor())
+    said = client.read["k"]
+    assert said.endswith(ONLY_FINISH_CLEARS), said
+
+
+def test_a_check_with_anything_else_failing_or_nothing_failing_says_nothing_of_it(
+    repo: Path,
+) -> None:
+    still = Reading([[CHECK]])
+    clean = Reading([[edit("e", "a - b", "a + b")], [CHECK]])
+    run(repo, still, auditor=ChangedTestAuditor(), run_id="r2")
+    run(repo, clean, run_id="r3")
+    failing_too, passing = still.read["k"], clean.read["k"]
+    assert "FAIL]" in failing_too, failing_too
+    assert ONLY_FINISH_CLEARS not in failing_too, failing_too
+    assert "PASS]" in passing, passing
+    assert ONLY_FINISH_CLEARS not in passing, passing
