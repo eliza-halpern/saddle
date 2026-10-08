@@ -1375,6 +1375,22 @@ def run_reasoning(journal: Path, *, stdout: IO[str]) -> int:
     return 0
 
 
+def run_hygiene(journals: Sequence[Path], repo: Path, *, as_json: bool, stdout: IO[str]) -> int:
+    """List the suite-hygiene rows the ledgers support (#80 part b, `saddle.hygiene`):
+    never-killed tests, duplicates by covered lines, and text pins, each citing the
+    span ids it rests on. No model call. Exit 1, with nothing judged, when a ledger is
+    missing or does not verify."""
+    from saddle.hygiene import HygieneError, as_record, render, report
+
+    try:
+        found = report(journals, repo)
+    except HygieneError as exc:
+        stdout.write(f"error: {exc}\n")
+        return 1
+    stdout.write(json.dumps(as_record(found), indent=1) + "\n" if as_json else render(found))
+    return 0
+
+
 def run_explain(journal: Path, *, attempt: str | None, stdout: IO[str]) -> int:
     """Explain a run from its journal: times, calls, verdicts, findings.
 
@@ -1953,6 +1969,22 @@ def build_parser() -> argparse.ArgumentParser:
         "reasoning", help="Print each round's whole reasoning, in order, from a run's journal."
     )
     reasoning.add_argument("journal", help="Journal path (a run's proofs.jsonl).")
+    hygiene = sub.add_parser(
+        "hygiene",
+        help="List tests the ledgers show never killed a mutant, duplicate another's "
+        "covered lines, or only pin text.",
+    )
+    hygiene.add_argument(
+        "--journal",
+        action="append",
+        required=True,
+        type=Path,
+        help="A ledger to read (a run's proofs.jsonl). Repeatable.",
+    )
+    hygiene.add_argument(
+        "--repo", type=Path, default=Path("."), help="Where the test files are (default: .)."
+    )
+    hygiene.add_argument("--json", action="store_true", help="Print the rows as JSON.")
     explain = sub.add_parser("explain", help="Explain a run from its journal.")
     explain.add_argument(
         "journal",
@@ -2620,6 +2652,7 @@ def main(
         "up",
         "explain",
         "reasoning",
+        "hygiene",
         "chat",
         "web",
         "audit",
@@ -2686,6 +2719,8 @@ def main(
         return run_explain(Path(args.journal), attempt=args.attempt, stdout=stdout or sys.stdout)
     if args.command == "reasoning":
         return run_reasoning(Path(args.journal), stdout=stdout or sys.stdout)
+    if args.command == "hygiene":
+        return run_hygiene(args.journal, args.repo, as_json=args.json, stdout=stdout or sys.stdout)
     if args.command == "tail":
         return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
     if args.command == "audit":

@@ -420,6 +420,26 @@ that saved none says `no saved reasoning in JOURNAL (M rounds)`. Exit 1, with no
 printed, when there is no journal or it does not verify (each sidecar must hash to
 the record its span sealed), so a record that cannot be trusted is never shown.
 
+## saddle hygiene --journal LEDGER [--journal LEDGER ...] [--repo DIR] [--json]
+
+Lists, with no model call, the tests the ledgers show add little. Each row cites the
+span ids it rests on, all present in the ledgers given:
+
+- **never-killed**: the test ran against scored mutants in the recorded audits, and
+  against no killed one. The claim is one-way. mutmut and StrykerJS record which
+  tests ran a mutated function (each sealed mutant's `tests`), not which test made it
+  fail. So a test that ran a killed mutant is not listed, even if it never killed one;
+  a listed test never killed one. A mutant row that names no tests supports nothing.
+- **duplicate**: tests one impact map recorded as covering the same lines (the
+  `test_fingerprints` the run-start map seals). Fingerprints from different maps are
+  never compared.
+- **text-pin**: a test, recorded by some map, every one of whose asserts compares a
+  string literal with text read from a file (`.read_text()`, `open(...).read()`,
+  `inspect.getsource`). A test with any other assert, or with `pytest.raises` or
+  `pytest.warns`, is not one. It is read from the test's source under `--repo`.
+
+Exit 1, with nothing judged, when a ledger is missing or does not verify.
+
 ### Attaching follow-up commits: `saddle audit --attach-to LEDGER [REV]`
 
 Commits made on a run's branch after the run (a review fix, say) are outside its
