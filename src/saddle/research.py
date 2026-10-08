@@ -34,6 +34,7 @@ What holds, and where:
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import html
 import json
@@ -51,7 +52,7 @@ import httpx
 from saddle.answers import LABEL, UNAVAILABLE, BraveAnswers
 from saddle.answers import RULES as ANSWERS_RULES
 from saddle.brave import BraveSearch
-from saddle.journal import append_span, build_span
+from saddle.journal import append_span, build_span, redact_secrets
 from saddle.mcpclient import (
     Approvals,
     McpError,
@@ -407,6 +408,9 @@ class Report:
     unread: tuple[tuple[str, str], ...] = ()
     """Cited sources the reader did not read, each with why: they cross marked,
     never as pages read (#159: one such source used to refuse the whole report)."""
+    full_summary: str | None = None
+    """The summary as the reader wrote it, when `summary` is that text cut to fit
+    (`shortened`): kept for the person's side panel (#93), never sent to the acting model."""
 
 
 UNMATCHED_LABEL: Final = "[citations not matched to sources]"
@@ -573,7 +577,9 @@ def validate_report(
                 f"refused: this summary is {size} tokens and a summary is at most "
                 f"{SUMMARY_TOKENS}; cut about {size - SUMMARY_TOKENS} tokens, "
                 "keeping what answers the question",
-                replace(checked, shortened=True) if isinstance(checked, Report) else None,
+                replace(checked, shortened=True, full_summary=summary.strip())
+                if isinstance(checked, Report)
+                else None,
             )
         if _copied(summary, gate.corpus):
             return (
@@ -735,6 +741,15 @@ class Brought:
     source: str
 
 
+RESEARCH_RECORDS: Final = "research"
+"""The directory beside a session's downloads that keeps each research call's full text
+(#93): everything the reader reported and every page it read, for the person's side
+panel. The acting model is never given it."""
+
+_RECORD_ID: Final = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
+"""A record's name is its tool call's id, which the model wrote: one path segment at most."""
+
+
 @dataclass
 class Researcher:
     """A session's reader: its servers, its download area and what it brought back."""
@@ -822,8 +837,17 @@ class Researcher:
 
     # -- one research call ---------------------------------------------------
 
-    def research(self, question: str, want: str = "summary") -> str:
-        """Run one reader turn; the text the acting model gets."""
+    @property
+    def records_dir(self) -> Path:
+        """Where this session's research records are kept (`RESEARCH_RECORDS`)."""
+        return self.downloads_dir.parent / RESEARCH_RECORDS
+
+    def research(self, question: str, want: str = "summary", record_id: str | None = None) -> str:
+        """Run one reader turn; the text the acting model gets.
+
+        With `record_id` (the acting tool call's id), the turn's full text is kept for the
+        person (`_keep`): the reader's whole report and what it read.
+        """
         reason = self.unavailable()
         if reason is not None:
             return f"error: research is unavailable: {reason}"
@@ -862,10 +886,59 @@ class Researcher:
         outcome = self._loop(question, want, offered, gate, downloads)
         self.fetches = gate.fetches
         if isinstance(outcome, str):
-            return "\n".join([f"error: {outcome}", *gate.blocked_lines()])
-        return self._render(
-            question, outcome, downloads, "\n".join([*gate.blocked_lines(), note]).strip()
-        )
+            answer = "\n".join([f"error: {outcome}", *gate.blocked_lines()])
+        else:
+            answer = self._render(
+                question, outcome, downloads, "\n".join([*gate.blocked_lines(), note]).strip()
+            )
+        self._keep(record_id, question, want, answer, outcome, gate)
+        return answer
+
+    def _keep(
+        self,
+        record_id: str | None,
+        question: str,
+        want: str,
+        answer: str,
+        outcome: Report | str,
+        gate: ReaderGate,
+    ) -> None:
+        """Keep one research call's full text for the person's side panel (#93).
+
+        The record holds the question, the text the acting model got, the reader's whole
+        report (with the summary it wrote before any cut) and every tool result it read,
+        in order, each secret-shaped span redacted as the journal redacts. Untrusted web
+        content: the page shows it as text and never as markup. Nothing is kept for a
+        call with no id, or an id that is more than one path segment; a write that fails
+        leaves no record, and the page then says the full text was not kept.
+        """
+        if record_id is None or _RECORD_ID.fullmatch(record_id) is None:
+            return
+        report: dict[str, Any] | None = None
+        if isinstance(outcome, Report):
+            report = dataclasses.asdict(outcome)
+            for key in ("summary", "full_summary", "value"):
+                if isinstance(report[key], str):
+                    report[key] = redact_secrets(report[key])
+        record = {
+            "question": question,
+            "want": want,
+            "untrusted": True,
+            "answer": redact_secrets(answer),
+            "report": report,
+            "error": outcome if isinstance(outcome, str) else None,
+            "read": [redact_secrets(text) for text in gate.corpus],
+            "visited": list(gate.visited),
+            "blocked": gate.blocked_lines(),
+        }
+        path = self.records_dir / f"{record_id}.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            scratch = path.with_name(f".{path.name}.part")
+            scratch.write_text(json.dumps(record, ensure_ascii=False))
+            os.replace(scratch, path)
+        except OSError:
+            return
 
     def _budget_text(self, tools: list[dict[str, Any]]) -> str:
         """The fixed search guidance (no numbers), when the reader is offered Brave search."""

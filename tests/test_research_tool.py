@@ -47,7 +47,7 @@ class Stub(Researcher):
     def unavailable(self) -> str | None:
         return self.problem
 
-    def research(self, question: str, want: str = "summary") -> str:
+    def research(self, question: str, want: str = "summary", record_id: str | None = None) -> str:
         self.asked_of_reader.append((question, want))
         return f"researched {question!r} ({want})"
 

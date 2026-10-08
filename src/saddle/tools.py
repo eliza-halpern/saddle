@@ -2215,7 +2215,7 @@ def _research_call(ctx: ToolContext, call: ToolCall) -> str:
     if want not in ("value", "summary", "download"):
         return "error: want must be value, summary or download"
     ctx.call_id = call.id
-    return ctx.research.research(question, want)
+    return ctx.research.research(question, want, record_id=call.id)
 
 
 def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None = None) -> str:
