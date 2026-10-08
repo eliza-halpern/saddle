@@ -40,6 +40,7 @@ const provides = {
     "stoppedText",
     "setMode",
     "setStatus",
+    "paintStatus",
     "newTurn",
     "select",
     "boot",

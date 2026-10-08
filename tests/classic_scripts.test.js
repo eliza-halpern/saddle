@@ -612,3 +612,247 @@ test("a session that compacted opens with the system's line where the questions 
     2,
   );
 });
+
+/* ---------- the topbar's status pill in a task session (#85 item 3) ---------- */
+
+/* In a task run's session the card carries the state -- "● running",
+   "? needs you", "■ stopped" -- and the topbar's pill read that state beside
+   it, twice on one screen. The rule now: the pill holds only what the card
+   leaves unsaid once it scrolls off a phone screen -- "needs you", "stopped",
+   "no outcome", and a state no card names at all -- and stays out of the way
+   where it would read the card's own words a second time. A chat session's pill
+   is as it was.
+
+   `pageWithStubs` is the page as index.html loads it (`loadPage`), with inert
+   wiring for what these tests are not about: the packet request an ended run's
+   card makes, the toast, and notify.js's tab title, sidebar dot and live
+   region. Each state reaches the page the way its stream delivers it, through
+   `handleTask`; the reading is the element the topbar paints, the same one
+   `document.querySelector("#status")` reaches in the page. */
+
+function pageWithStubs() {
+  const page = loadPage();
+  const doc = page.document;
+  doc.getElementById = (/** @type {string} */ id) => doc.querySelector(`#${id}`); // some boxes the page asks for by id
+  page.api = async () => ({}); // the packet an ended run's card would fetch
+  page.notice = () => {}; // the toast's text
+  page.runState = () => {}; // notify.js: the tab, the sidebar dot, the live region
+  return page;
+}
+
+/** One run's state, as the session's event stream delivers it. */
+function reportRun(/** @type {any} */ page, /** @type {string} */ state) {
+  page.handleTask({
+    kind: "task.state",
+    run_id: "pill-test-run",
+    task: "close the duplicate status pill",
+    state,
+    question: state === "needs_you" ? { text: "Submit the work or stop?", options: ["Submit", "Stop"] } : undefined,
+  });
+}
+
+/** The Send button, which the page turns into the Stop a going run or a turn
+   that waits for you needs: the pill's state is what decides its face. */
+function topbarSend(/** @type {any} */ page) {
+  const button = page.document.querySelector("#send");
+  return {
+    glyph: button.textContent,
+    title: button.title,
+    stopping: button.classList.contains("stopping"),
+  };
+}
+
+/** What the topbar's status pill is: whether the page shows it, its face, the
+   word it reads, and the name a screen reader is given. */
+function topbarPill(/** @type {any} */ page) {
+  const node = page.document.querySelector("#status");
+  return {
+    shown: !node.hidden,
+    face: node.className,
+    words: node.textContent,
+    name: node.getAttribute("aria-label"),
+  };
+}
+
+/** The pill this session's topbar wears when a run that was going reaches
+   `state`, in the lane named: `showMode("task")` is what puts the page in the
+   task lane, the same `body` hook the context meter follows. */
+function pillAfterRun(/** @type {string} */ state, /** @type {string} */ lane) {
+  const page = pageWithStubs();
+  page.showMode(lane);
+  reportRun(page, "running");
+  reportRun(page, state);
+  return topbarPill(page);
+}
+
+test("a task session hides the pill for every state the run's own card already reads", () => {
+  // Known-bad, the defect itself: the topbar read "task running" beside the
+  // card's "● running", and read "finished" and "unchanged" the same way.
+  /** @type {Record<string, any>} */
+  const seen = {};
+  for (const state of ["running", "finished", "unchanged", "loading"]) {
+    seen[state] = pillAfterRun(state, "task").shown;
+  }
+  assert.deepStrictEqual(seen, { running: false, finished: false, unchanged: false, loading: false });
+});
+
+test("a task session keeps the pill for needs you, stopped, no outcome and asked, each in its own face", () => {
+  // Kept on purpose, in words a phone and a screen reader both reach: with the
+  // card scrolled off, the topbar is where these states are read.
+  /** @type {Record<string, any>} */
+  const seen = {};
+  for (const state of ["needs_you", "stopped", "failed", "asked"]) {
+    seen[state] = pillAfterRun(state, "task");
+  }
+  assert.deepStrictEqual(seen, {
+    needs_you: { shown: true, face: "status needs", words: "needs you", name: "needs" },
+    stopped: { shown: true, face: "status stopped", words: "stopped", name: "stopped" },
+    failed: { shown: true, face: "status failed", words: "no outcome", name: "failed" },
+    asked: { shown: true, face: "status needs", words: "needs you", name: "needs" },
+  });
+});
+
+test("the Stop this page pressed reads stopping in the pill until the run's own state arrives", () => {
+  const page = pageWithStubs();
+  page.showMode("task");
+  reportRun(page, "running");
+  assert.strictEqual(topbarPill(page).shown, false); // the card's "● running" is enough
+  page.stopTask("pill-test-run");
+  assert.deepStrictEqual(topbarPill(page), {
+    shown: true,
+    face: "status working",
+    words: "stopping…",
+    name: "working",
+  });
+  reportRun(page, "stopped");
+  assert.deepStrictEqual(topbarPill(page), {
+    shown: true,
+    face: "status stopped",
+    words: "stopped",
+    name: "stopped",
+  });
+});
+
+test("a state no run card names still reaches the pill, where no card would say it", () => {
+  const page = pageWithStubs();
+  page.showMode("task");
+  reportRun(page, "running");
+  page.setStatus("error"); // EventSource's onerror: no card says anything about a broken stream
+  assert.deepStrictEqual(topbarPill(page), { shown: true, face: "status error", words: "error", name: "error" });
+});
+
+test("a chat session shows the pill for every state, as it did before the task lane had a card", () => {
+  /** @type {Record<string, any>} */
+  const seen = {};
+  for (const kind of ["idle", "working", "needs", "error"]) {
+    const page = pageWithStubs(); // the page's own lane is chat: no task chrome
+    page.setStatus(kind, kind === "working" ? "task running" : undefined);
+    seen[kind] = topbarPill(page);
+  }
+  assert.deepStrictEqual(seen, {
+    idle: { shown: true, face: "status idle", words: "idle", name: "idle" },
+    working: { shown: true, face: "status working", words: "task running", name: "working" },
+    needs: { shown: true, face: "status needs", words: "needs", name: "needs" },
+    error: { shown: true, face: "status error", words: "error", name: "error" },
+  });
+});
+
+test("a run reported to a session in the Ask lane reads its own state there, and the Send button follows", () => {
+  // Beyond the task lane the topbar is the only place a run's state is spoken,
+  // so this is the page's old behaviour, kept as it was: the task lane's rule
+  // says nothing about a chat session's pill.
+  /** @type {Record<string, any>} */
+  const seen = {};
+  const page = pageWithStubs();
+  page.showMode("ask");
+  for (const state of ["running", "needs_you", "stopped"]) {
+    reportRun(page, state);
+    seen[state] = { pill: topbarPill(page), send: topbarSend(page) };
+  }
+  assert.deepStrictEqual(seen, {
+    running: {
+      pill: { shown: true, face: "status working", words: "task running", name: "working" },
+      send: { glyph: "■", title: "Stop", stopping: true },
+    },
+    needs_you: {
+      pill: { shown: true, face: "status needs", words: "needs you", name: "needs" },
+      send: { glyph: "■", title: "Stop", stopping: true },
+    },
+    // An ended state is the card's to say, so here the topbar keeps the state it
+    // last spoke rather than inventing a fourth one.
+    stopped: {
+      pill: { shown: true, face: "status needs", words: "needs you", name: "needs" },
+      send: { glyph: "■", title: "Stop", stopping: true },
+    },
+  });
+});
+
+test("a task session reaches for the Stop its run needs, and holds the state it last spoke", () => {
+  // The pill's face is not the only thing a run's state decides: while a run is
+  // going, or waits for an answer, the Send button is the Stop. What the card
+  // ends leaves it standing, exactly as it did before this item.
+  const page = pageWithStubs();
+  page.showMode("task");
+  reportRun(page, "running");
+  assert.deepStrictEqual(topbarSend(page), { glyph: "■", title: "Stop", stopping: true });
+  // Hidden, but still the state the page last spoke -- which is also what a
+  // reader is given if the lane changes before the next event arrives.
+  assert.deepStrictEqual(topbarPill(page), {
+    shown: false,
+    face: "status working",
+    words: "task running",
+    name: "working",
+  });
+  reportRun(page, "needs_you");
+  assert.deepStrictEqual(topbarSend(page), { glyph: "■", title: "Stop", stopping: true });
+  assert.deepStrictEqual(topbarPill(page), {
+    shown: true,
+    face: "status needs",
+    words: "needs you",
+    name: "needs",
+  });
+  reportRun(page, "unchanged");
+  assert.deepStrictEqual(topbarPill(page), {
+    shown: false,
+    face: "status needs",
+    words: "needs you",
+    name: "needs",
+  });
+});
+
+test("a session that has run nothing wears its lane's pill: idle in the chat lane, hidden in the task lane", () => {
+  const ask = pageWithStubs();
+  ask.showMode("ask");
+  const task = pageWithStubs();
+  task.showMode("task");
+  assert.deepStrictEqual(topbarPill(ask), {
+    shown: true,
+    face: "status idle",
+    words: "idle",
+    name: "idle",
+  });
+  assert.deepStrictEqual(topbarPill(task), {
+    shown: false,
+    face: "status idle",
+    words: "idle",
+    name: "idle",
+  });
+});
+
+test("switching out of the task lane takes the card's rule with it, both ways", () => {
+  const page = pageWithStubs();
+  page.setStatus("working", "task running");
+  const ask = topbarPill(page); // a chat session, before any Task run: shown, as ever
+  page.showMode("task");
+  const task = topbarPill(page); // the task lane, with no run of its own yet
+  page.showMode("ask");
+  const back = topbarPill(page); // switched out: chat chrome, the pill with it
+  assert.deepStrictEqual(
+    [ask, task, back],
+    [
+      { shown: true, face: "status working", words: "task running", name: "working" },
+      { shown: false, face: "status working", words: "task running", name: "working" },
+      { shown: true, face: "status working", words: "task running", name: "working" },
+    ],
+  );
+});

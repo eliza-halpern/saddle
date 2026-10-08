@@ -106,6 +106,14 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
  * @typedef {{kind: string, [field: string]: any}} ServerEvent
  */
 
+/**
+ * What the topbar's status pill reports: `kind` is the state it is painted as --
+ * the class the stylesheet colours and the name `aria-label` gives -- and
+ * `detail` is the word it reads, which a state's own word ("stopping…", "no
+ * outcome") spells out instead of the word the class already carries.
+ * @typedef {{kind: string, detail?: string}} StatusPill
+ */
+
 /** @typedef {{details: HTMLDetailsElement, label: HTMLElement, detail: HTMLElement, name: string}} ToolRowParts */
 /** @typedef {HTMLElement & {output?: string}} TerminalBody */
 /** @typedef {{name: string, path: string, isImage: boolean}} Attachment */
@@ -131,6 +139,12 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
  * @property {string | null} folder
  * @property {string} mode
  * @property {string | null} [activeTask]
+ * @property {{kind: string, detail?: string}} status
+ *   The state the last event reported: the send button and, in a chat session,
+ *   the status pill follow it.
+ * @property {StatusPill | null} taskPill
+ *   What the last state of this session's Task run holds in the status pill, or
+ *   null for a state the run's own card already says (#85 item 3).
  * @property {HTMLElement | null} [pendingTaskTurn]
  * @property {string | null} [historyFor]
  * @property {{index: number, editing: boolean}} [rewind]
@@ -159,6 +173,10 @@ const state = {
   personas: {},
   folder: null,
   mode: "ask",
+  // The page starts idle: this is what the pill and the send button show before
+  // the first event says anything else.
+  status: { kind: "idle" },
+  taskPill: null,
 };
 
 /** @type {Set<HTMLElement>} */
@@ -897,18 +915,14 @@ function connect(sessionId) {
 }
 
 /**
+ * The state the last event reported: it drives the send button, and the status
+ * pill through `paintStatus`.
  * @param {string} kind
  * @param {string} [detail]
  */
 function setStatus(kind, detail) {
-  const node = $("#status");
-  node.className = `status ${kind === "idle" ? "idle" : kind}`;
-  node.textContent = detail || kind;
-  // The pill's face is a kaomoji the stylesheet puts in front of the word, and a
-  // screen reader reads it as punctuation. The name says the state, in words, in
-  // every state -- including the ones where a detail ("stopping…") replaces the
-  // word the class already spells.
-  node.setAttribute("aria-label", kind);
+  state.status = { kind, detail };
+  paintStatus();
   // While a turn runs the send button stops it: one control, two jobs, so
   // the thing you reach for is always under the cursor you just used.
   const sendButton = $("#send");
@@ -916,6 +930,55 @@ function setStatus(kind, detail) {
   sendButton.textContent = working ? "■" : "↑";
   sendButton.title = working ? "Stop" : "Send";
   sendButton.classList.toggle("stopping", working);
+}
+
+/**
+ * Paint the topbar's status pill for the lane the page is in.
+ *
+ * A task session shows it only for what its run card does not say once that
+ * card has scrolled away (#85 item 3), so `statusShown` decides first, and a
+ * state it says nothing about hides the pill rather than reading the card's own
+ * words a second time.
+ */
+function paintStatus() {
+  const shown = statusShown(document.body.dataset.mode, state.status, state.taskPill);
+  const node = $("#status");
+  node.hidden = shown === null;
+  // With nothing to hold, the pill still reads the state the page last spoke,
+  // which a hidden face does not contradict.
+  const paint = shown || state.status;
+  const kind = paint.kind;
+  const detail = paint.detail;
+  node.className = `status ${kind}`;
+  node.textContent = detail || kind;
+  // The pill's face is a kaomoji the stylesheet puts in front of the word, and a
+  // screen reader reads it as punctuation. The name says the state, in words, in
+  // every state -- including the ones where a detail ("stopping…") or a run's
+  // own word ("stopped") replaces the word the class already spells.
+  node.setAttribute("aria-label", kind);
+}
+
+/**
+ * What the pill shows: the state to paint it as and the word it reads, or null
+ * when the page shows no pill at all.
+ *
+ * A chat session's pill says what its own turn is doing, as it always did. A
+ * task session says the same state twice: the run card beside the pill carries
+ * its own pill, which reads "● running", "? needs you" and "■ stopped", and the
+ * topbar repeated it (#85 item 3). There the pill keeps only what that card
+ * leaves unsaid once it scrolls off a phone screen -- `run`, what the last
+ * `task.state` event held, chosen by tasks.js's `PILL_STATES` -- plus a state
+ * no card names at all, such as a broken stream. Every other state a run
+ * reaches is hidden rather than read twice.
+ * @param {string | undefined} lane the lane the session is in, as `body` records it
+ * @param {StatusPill} spoke the state the last event said
+ * @param {StatusPill | null} run what this session's run holds
+ * @returns {StatusPill | null}
+ */
+function statusShown(lane, spoke, run) {
+  if (lane !== "task") return spoke;
+  if (run) return run;
+  return spoke.kind === "error" ? spoke : null;
 }
 
 /* ---------- sessions ---------- */
@@ -973,6 +1036,9 @@ function select(sessionId) {
   // so nothing of the last one -- not its stop button -- is carried over.
   state.busy = false;
   state.activeTask = null;
+  // What the last session's run left in the pill belongs to that session, as
+  // the run card that showed it does.
+  state.taskPill = null;
   setStatus("idle");
   runSelected(sessionId);
   loadSessions();
@@ -1054,6 +1120,7 @@ function showMode(mode) {
   $("#mode-chip").textContent = lane.id;
   $("#mode-chip").dataset.mode = lane.id;
   document.body.dataset.mode = lane.id; // page-level hook: task mode quiets the chat-only chrome
+  paintStatus(); // each lane shows the status pill its own way (#85 item 3)
   $("#input").placeholder = lane.placeholder;
   $("#mode-note").hidden = true;
   paintFullAccess();

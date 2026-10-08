@@ -30,6 +30,59 @@ const TASK_STATES = {
 };
 const ENDED = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 
+/**
+ * What each state a run can report -- every name `TASK_STATES` has, plus
+ * "stopping", which only this page's Stop button uses -- leaves in the topbar's
+ * status pill, for #85 item 3: in a task session the topbar read a state the
+ * run's own card read beside it, so the pill holds only what that card leaves
+ * unsaid once it scrolls off a phone screen. `null` hides the pill; an entry
+ * shows it as the state the topbar paints, spelled its own way.
+ *
+ * `needs_you` and `asked` are held as `needs` on purpose: it is the state that
+ * needs you, the class the topbar already paints for it, and the name the
+ * phone's answer control follows. `paintRunStatus` follows this table.
+ * @type {Record<string, {kind: string, detail?: string} | null>}
+ */
+const PILL_STATES = {
+  running: null, // the card's own "● running"
+  needs_you: { kind: "needs", detail: "needs you" }, // the card's "? needs you", held on purpose
+  finished: null, // the card's own "✓ finished"
+  // "stopped" is the state that made this pill: the run was ended by you, which
+  // the chat has no state of its own to say. The word it reads is the name of
+  // the state, which the topbar spells from the face it wears.
+  stopped: { kind: "stopped" },
+  asked: { kind: "needs", detail: "needs you" }, // ended needing you, with nothing left to answer
+  unchanged: null, // the card's own "= unchanged"
+  failed: { kind: "failed", detail: "no outcome" }, // the card's word for it, in the class the topbar colours
+  loading: null, // a run that has not started yet, which the card spells out in its own words
+  // This page asked for the stop, and the card reads "stopping" until the run's
+  // own state arrives: the pill says so beside it, and stops saying so when it does.
+  stopping: { kind: "working", detail: "stopping…" },
+};
+
+/**
+ * Say a run's state in the topbar (#85 item 3): `PILL_STATES` is the rule.
+ *
+ * The face the topbar wears, and the send button that follows it, stay what
+ * they were for the states they already named: a run that is going or waiting
+ * on you still stops on Send, and one the card ends holds no pill at all, so
+ * the next thing this session does shows its own state instead of the last
+ * run's. A state the card says for itself leaves the pill holding nothing; a
+ * state the card does not name -- "stopped", "no outcome", the "stopping…"
+ * this page asked for -- puts its own word there.
+ * @param {string} reported the state a run reported, or "stopping"
+ */
+function paintRunStatus(reported) {
+  state.taskPill = PILL_STATES[reported] ?? null;
+  if (reported === "needs_you") {
+    setStatus("needs", "needs you");
+  } else if (reported === "running") {
+    setStatus("working", "task running");
+  } else {
+    paintStatus();
+  }
+}
+
 /** @typedef {{box: HTMLElement, fill: HTMLElement, value: HTMLElement}} Meter */
 
 /**
@@ -619,6 +672,10 @@ async function stopTask(runId) {
     card.stopping = true;
     paintNow(card);
   }
+  // The card reads "stopping", and the topbar's pill holds that word too until
+  // the run's own state arrives (#85 item 3: it would otherwise stay "task
+  // running" beside a card that no longer says so).
+  paintRunStatus("stopping");
   try {
     await api(`/api/tasks/${runId}/stop`, { method: "POST" });
   } catch (error) {
@@ -1436,11 +1493,9 @@ function handleTask(event) {
       showQuestion(card, event.state === "needs_you" ? event.question : null);
       state.activeTask = ENDED.has(event.state) ? null : event.run_id;
       runState(/** @type {string} */ (state.sessionId), event.state, event.task); // notify.js: tab, dot, live region
-      if (event.state === "needs_you") {
-        setStatus("needs", "needs you");
-      } else if (event.state === "running") {
-        setStatus("working", "task running");
-      }
+      // #85 item 3: the topbar's pill holds only what the run's own card says
+      // instead, and `PILL_STATES` says which states hold what.
+      paintRunStatus(event.state);
       if (ENDED.has(event.state)) {
         if (event.detail && event.state === "failed") {
           card.detail = event.detail; // why it failed, for loadPacket when there is no packet
