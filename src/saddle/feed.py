@@ -206,9 +206,10 @@ class AuditResult:
     tree: str
     findings: tuple[Finding, ...]
     note: str = ""
-    mutant_detail: tuple[tuple[str, str, str], ...] = ()
-    """Tier 2's (name, status, show) for every scored mutant; sealed in the
-    audit span's sidecar under `mutant_detail` when non-empty."""
+    mutant_detail: tuple[tuple[str, str, str, tuple[str, ...]], ...] = ()
+    """Tier 2's (name, status, show, tests) for every scored mutant; sealed in the
+    audit span's sidecar under `mutant_detail` when non-empty. `tests` names the
+    tests the mutation engine recorded as having run that mutant's function."""
     coverage: str = ""
     """A failing or not-proven coverage finding in `coverage_text`'s words
     (function, its docstring's first line, the lines), read off the audited
@@ -251,7 +252,8 @@ class AuditResult:
             **(
                 {
                     "mutant_detail": [
-                        {"name": n, "status": s, "show": t} for n, s, t in self.mutant_detail
+                        {"name": n, "status": s, "show": t, "tests": list(runs)}
+                        for n, s, t, runs in self.mutant_detail
                     ]
                 }
                 if self.mutant_detail
@@ -728,7 +730,7 @@ class AuditFeed:
                 self._checked_tree = mode
             pending = self._p1_state(final=point == "finish") if 1 in tiers else None
             found: list[Finding] = []
-            detail: tuple[tuple[str, str, str], ...] = ()
+            detail: tuple[tuple[str, str, str, tuple[str, ...]], ...] = ()
             if 0 in tiers:
                 # Tier 0 first: its checks take seconds, and a failing one is
                 # refused before the suite and mutation spend minutes on a tree

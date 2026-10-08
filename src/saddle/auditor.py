@@ -406,10 +406,11 @@ class Findings:
     """`--tier2 shortlist` only: the tier-2 mutation finding's open survivors,
     all of them, in shortlist order (its detail names the first few). Empty,
     and absent from `to_dict`, otherwise."""
-    mutant_detail: tuple[tuple[str, str, str], ...] = ()
-    """Tier 2 only: (name, status, show) for every scored mutant
+    mutant_detail: tuple[tuple[str, str, str, tuple[str, ...]], ...] = ()
+    """Tier 2 only: (name, status, show, tests) for every scored mutant
     (`MutationOutcome.mutant_detail`), in either mode; absent from `to_dict`
-    when empty. Recording only."""
+    when empty. `tests` names the tests the engine recorded as having run the
+    mutated function. Recording only."""
 
     @property
     def passed(self) -> bool:
@@ -442,7 +443,8 @@ class Findings:
             **(
                 {
                     "mutant_detail": [
-                        {"name": n, "status": s, "show": t} for n, s, t in self.mutant_detail
+                        {"name": n, "status": s, "show": t, "tests": list(runs)}
+                        for n, s, t, runs in self.mutant_detail
                     ]
                 }
                 if self.mutant_detail
@@ -460,7 +462,7 @@ class Findings:
             findings=tuple(Finding(**{**f, "cites": tuple(f["cites"])}) for f in raw),
             survivors=tuple(Survivor(**v) for v in data.get("survivors", ())),  # type: ignore[attr-defined]
             mutant_detail=tuple(
-                (d["name"], d["status"], d["show"])
+                (d["name"], d["status"], d["show"], tuple(d.get("tests", ())))
                 for d in data.get("mutant_detail", ())  # type: ignore[attr-defined]
             ),
         )
@@ -2335,14 +2337,15 @@ class Auditor:
             statuses["red-phase"] = ("not-applicable", RED_PHASE_ONLY_TESTS, red[2])
         sidecars: dict[str, Mapping[str, Any]] = {}
         if gated.mutation is not None:
-            # The shortlist records `mutant_detail` as (name, status, show)
+            # The shortlist records `mutant_detail` as (name, status, show, tests)
             # tuples; the sidecar seals the record shape Findings.to_dict
             # and feed.AuditResult.to_dict already use, which is what
             # mutant_text.describe_mutation reads.
             sidecars["mutation"] = {
                 **dataclasses.asdict(gated.mutation),
                 "mutant_detail": [
-                    {"name": n, "status": s, "show": t} for n, s, t in gated.mutation.mutant_detail
+                    {"name": n, "status": s, "show": t, "tests": list(runs)}
+                    for n, s, t, runs in gated.mutation.mutant_detail
                 ],
             }
         rewrote = statuses.get("assertion-preservation")

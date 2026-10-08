@@ -390,7 +390,7 @@ def test_real_mutmut_narrowed_run_counts_no_mutant_of_a_statement_that_did_not_c
     )
     assert (narrowed.killed, narrowed.total) == (1, 2)
     assert len(narrowed.mutant_detail) == 2
-    assert all("y = " not in mutation_text(show) for _n, _s, show in narrowed.mutant_detail)
+    assert all("y = " not in mutation_text(show) for _n, _s, show, _ in narrowed.mutant_detail)
     assert {line for _, line in narrowed.survivor_lines} == {6}
 
 

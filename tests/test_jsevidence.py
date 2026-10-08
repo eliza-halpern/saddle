@@ -295,7 +295,7 @@ def test_stryker_kills_what_the_tests_pin_and_names_what_they_do_not(project: Pa
     assert detail[4] == "-  if (x < lo) return lo;\n+  if (x <= lo) return lo;"
     assert all(line in range(4, 10) for _, line in out.survivor_lines)
     assert dict(out.statuses)["Killed"] == out.killed
-    assert {n for n, _, _ in out.mutant_detail} >= set(out.survivors)
+    assert {n for n, _, _, _ in out.mutant_detail} >= set(out.survivors)
 
 
 @needs_stryker
@@ -427,22 +427,59 @@ def test_a_change_runs_only_the_test_files_that_reach_it_and_unreached_mutants_s
     changed = {(str(scoped / "static" / "a.js"), n) for n in range(1, 12)}
     out = js.mutation_sample(scoped, changed, tools=REPO)
     assert seen == [["tests/a.test.js"]]  # b.test.js reaches nothing that changed
-    statuses = {name: status for name, status, _ in out.mutant_detail}
+    statuses = {name: status for name, status, _, _ in out.mutant_detail}
     by_line: dict[int, set[str]] = {}
-    for name, status, _ in out.mutant_detail:
+    for name, status, _, _ in out.mutant_detail:
         by_line.setdefault(int(name.split(":")[1]), set()).add(status)
     # known kill: `add`'s `+` is pinned; known survivor: `x > hi` runs, but nothing
     # pins its boundary (`>=`)
     assert statuses["static/a.js:2:10 ArithmeticOperator"] == "Killed"
     assert "Survived" in by_line[6]
     # no test calls `unused`: not killed, not dropped, not a plain survivor either
-    unreached = [n for n, status, _ in out.mutant_detail if status == "NoCoverage"]
+    unreached = [n for n, status, _, _ in out.mutant_detail if status == "NoCoverage"]
     assert unreached
     assert all(int(n.split(":")[1]) in (9, 10) for n in unreached)
     assert out.untested == len(unreached)
     assert "node --test files only, here tests/a.test.js;" in out.untested_note
     assert set(out.survivors) >= set(unreached)  # still counted against the kill rate
     assert out.total == len(out.mutant_detail)
+
+
+@needs_stryker
+def test_each_javascript_mutant_names_the_test_files_that_ran_its_own_lines(
+    scoped: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good, both ways the Python shape has them: `a.js` and `b.js` both
+    change and each is reached by its own test file, so mutants of `add`, `clamp`
+    and the rest of `a.js` name `tests/a.test.js` alone while mutants of `shout`
+    name `tests/b.test.js` alone -- never the shared selection, never one list for
+    every mutant. `unused`, which no test calls, names nothing at all.
+
+    Known-bad for each: the whole chosen suite on every mutant, one list shared by
+    every mutant, and a mutant of code no test ran naming a test file, all read as
+    proof a test ran code it never ran."""
+    seen = spy_on_the_suite(monkeypatch)
+    changed = [(str(scoped / "static" / "a.js"), n) for n in range(1, 12)] + [
+        (str(scoped / "static" / "b.js"), n) for n in (1, 2, 3)
+    ]
+    out = js.mutation_sample(scoped, changed, tools=REPO)
+    assert seen[0] == ["tests/a.test.js", "tests/b.test.js"]
+    ran = {name: tests for name, _, _, tests in out.mutant_detail}
+    assert ran
+    in_a = {n: t for n, t in ran.items() if n.startswith("static/a.js:")}
+    in_b = {n: t for n, t in ran.items() if n.startswith("static/b.js:")}
+    assert set(in_b.values()) == {("tests/b.test.js",)}, in_b
+    reached = {n: t for n, t in in_a.items() if int(n.split(":")[1]) in (2, 5, 6, 7)}
+    assert reached, in_a
+    assert set(reached.values()) == {("tests/a.test.js",)}, reached
+    # `unused` (lines 9-11) is reached by no test file: it names none of them.
+    unrun = {n: t for n, t in in_a.items() if int(n.split(":")[1]) in (9, 10, 11)}
+    assert unrun, in_a
+    assert set(unrun.values()) == {()}, unrun
+    selected = {"tests/a.test.js", "tests/b.test.js"}
+    assert all(set(tests) != selected for tests in ran.values()), ran
+    # not one list shared by every mutant: a.js's and b.js's differ
+    assert len(set(ran.values())) > 1, ran
 
 
 @needs_stryker
@@ -712,7 +749,7 @@ def test_a_page_script_mutant_that_a_sandboxed_node_test_pins_is_killed(
     ran every mutant switched off and every one survived."""
     line = _line_of(page_project, rel, text)
     out = js.mutation_sample(page_project, [(str(page_project / rel), line)], tools=REPO)
-    killed = [name for name, status, _ in out.mutant_detail if status == "Killed"]
+    killed = [name for name, status, _, _ in out.mutant_detail if status == "Killed"]
     assert any(pinned in name for name in killed), (out.survivors, out.mutant_detail)
 
 

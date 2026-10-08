@@ -472,27 +472,159 @@ def test_mutant_detail_records_killed_mutants_and_omits_unscored_ones(
     work.mkdir()
     (work / "n.py").write_text("def f():\n    return 2\n")
     outcome = mutation_sample(work, {(str(work / "n.py"), 2)}, 10, test_files=())
-    assert [(n, s) for n, s, _ in outcome.mutant_detail] == [
+    assert [(n, s) for n, s, _, _ in outcome.mutant_detail] == [
         ("m1", "survived"),
         ("m2", "killed"),
         ("m3", "no tests"),
     ]
-    assert {n: t for n, _, t in outcome.mutant_detail}["m2"] == SHOW
+    assert {n: t for n, _, t, _ in outcome.mutant_detail}["m2"] == SHOW
+
+
+def _stats_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, results: str, show: str, stats: str
+) -> None:
+    """A mutmut stub whose `run` leaves the stats pass's record of who ran what.
+
+    The stub runs with `cwd` the scratch copy, exactly as the real engine does,
+    so writing `mutants/mutmut-stats.json` there is what mutmut's own
+    `save_stats` does at the end of its stats pass.
+    """
+    stub = tmp_path / "stats-stub"
+    stub.mkdir()
+    script = stub / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  run) mkdir -p mutants && printf "%s" \'' + stats + "' > mutants/mutmut-stats.json;;\n"
+        f"  results) printf '%s\\n' '{results}';;\n"
+        f"  show) printf '%s' '{show}';;\n"
+        "esac\n"
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub}{os.pathsep}{os.environ['PATH']}")
+
+
+STATS_RUN = json.dumps(
+    {
+        "tests_by_mangled_function_name": {
+            "n.x_f": ["test_n.py::test_f[1]", "test_n.py::test_f"],
+        }
+    }
+)
 
 
 def test_tier2_findings_carry_mutant_detail_in_score_mode_and_round_trip(
     tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
+    _stats_stub(
+        tmp_path,
+        monkeypatch,
+        "  n.x_f__mutmut_1: killed\n  n.x_f__mutmut_2: survived",
+        SHOW3,
+        STATS_RUN,
+    )
     auditor = Auditor(tree)
     found = auditor.tier2()
-    assert [(n, s) for n, s, _ in found.mutant_detail] == [("k1", "killed"), ("s1", "survived")]
+    assert [(n, s) for n, s, _, _ in found.mutant_detail] == [
+        ("n.x_f__mutmut_1", "killed"),
+        ("n.x_f__mutmut_2", "survived"),
+    ]
     sealed = found.to_dict()["mutant_detail"]
     assert isinstance(sealed, list)
-    assert sealed[0] == {"name": "k1", "status": "killed", "show": SHOW3}
+    # The tests mutmut's stats pass recorded for the mutated function reach the
+    # sealed row, sorted, brackets included, and both mutants of one function
+    # carry that function's own list.
+    assert sealed[0] == {
+        "name": "n.x_f__mutmut_1",
+        "status": "killed",
+        "show": SHOW3,
+        "tests": ["test_n.py::test_f", "test_n.py::test_f[1]"],
+    }
+    assert sealed[1]["tests"] == ["test_n.py::test_f", "test_n.py::test_f[1]"]
     assert Findings.from_dict(found.to_dict()).mutant_detail == found.mutant_detail
     assert auditor.tier1().mutant_detail == ()
     assert "mutant_detail" not in auditor.tier1().to_dict()
+
+
+METHOD_BASE = "def f():\n    return 1\n\n\nclass Box:\n    def get(self, k):\n        return 1\n"
+METHOD_FIXED = "def f():\n    return 2\n\n\nclass Box:\n    def get(self, k):\n        return 2\n"
+METHOD_TEST = (
+    "from n import Box, f\n\n\ndef test_f():\n    assert f() == 2\n\n\n"
+    "def test_get():\n    assert Box().get(1) == 2\n"
+)
+METHOD_RESULTS = (
+    "  n.x_f__mutmut_1: killed\n  n.x_f__mutmut_2: survived\n  n.xǁBoxǁget__mutmut_1: survived"
+)
+METHOD_STATS = json.dumps(
+    {
+        "tests_by_mangled_function_name": {
+            "n.x_f": ["test_n.py::test_f[1]", "test_n.py::test_f"],
+            "n.xǁBoxǁget": ["test_n.py::test_get"],
+        }
+    }
+)
+
+
+@pytest.fixture
+def method_tree(tmp_path: Path) -> Path:
+    """A change to a function and to a method, each with its own covering test."""
+    root = tmp_path / "method"
+    root.mkdir()
+    _git(root, "init")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    (root / "n.py").write_text(METHOD_BASE)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "base")
+    (root / "n.py").write_text(METHOD_FIXED)
+    (root / "test_n.py").write_text(METHOD_TEST)
+    return root
+
+
+def test_every_sealed_row_names_its_own_functions_tests_and_no_other_functions(
+    method_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good, in the shape an audit seals: two mutants of `f` carry `f`'s
+    tests, and the mutant of `Box.get` -- mutmut mangles a method as `xǁBoxǁget` --
+    carries the method's test alone. Known-bad: one list for every mutant, or the
+    tests of the whole test file rather than of the function; either drops a row."""
+    _stats_stub(tmp_path, monkeypatch, METHOD_RESULTS, SHOW3, METHOD_STATS)
+    found = Auditor(method_tree).tier2()
+    assert [(n, s, t) for n, s, _, t in found.mutant_detail] == [
+        ("n.x_f__mutmut_1", "killed", ("test_n.py::test_f", "test_n.py::test_f[1]")),
+        ("n.x_f__mutmut_2", "survived", ("test_n.py::test_f", "test_n.py::test_f[1]")),
+        ("n.xǁBoxǁget__mutmut_1", "survived", ("test_n.py::test_get",)),
+    ]
+    sealed = found.to_dict()["mutant_detail"]
+    assert isinstance(sealed, list)
+    assert [r["tests"] for r in sealed] == [
+        ["test_n.py::test_f", "test_n.py::test_f[1]"],
+        ["test_n.py::test_f", "test_n.py::test_f[1]"],
+        ["test_n.py::test_get"],
+    ]
+    # Known-good for a record an earlier saddle sealed, before `tests` existed: it
+    # still reads, and each row then names nothing (the absence of a record).
+    older = dict(found.to_dict())
+    older["mutant_detail"] = [
+        {"name": r["name"], "status": r["status"], "show": r["show"]} for r in sealed
+    ]
+    assert Findings.from_dict(older).mutant_detail == tuple(
+        (name, status, show, ()) for name, status, show, _ in found.mutant_detail
+    )
+    assert Findings.from_dict(found.to_dict()).mutant_detail == found.mutant_detail
+
+    # The journal-sealed sidecar of the tier-2 mutation span carries the same rows:
+    # this is the record a sealed audit leaves behind, not only the in-process one.
+    journal = tmp_path / "proofs.jsonl"
+    Auditor(method_tree, config=AuditorConfig(journal=journal)).tier2()
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
+    assert span.attempt_hash
+    sealed = json.loads(attempt_sidecar_path(journal, span.span_id).read_text())
+    assert [r["tests"] for r in sealed["mutant_detail"]] == [
+        ["test_n.py::test_f", "test_n.py::test_f[1]"],
+        ["test_n.py::test_f", "test_n.py::test_f[1]"],
+        ["test_n.py::test_get"],
+    ]
 
 
 def test_tiered_json_leaves_mutant_detail_out(
@@ -643,7 +775,7 @@ def test_open_survivors_are_surfaced_with_every_row_and_the_finish_is_accepted(
     assert "mutant s0 (survived)" in mutation.detail
     assert "(and 2 more)" in mutation.detail
     assert [s.name for s in found.survivors] == ["s0", "s1", "s2"]
-    assert [n for n, _, _ in found.mutant_detail] == ["s0", "s1", "s2"]
+    assert [n for n, _, _, _ in found.mutant_detail] == ["s0", "s1", "s2"]
     result = AuditResult("finish", "t" * 12, found.findings, mutant_detail=found.mutant_detail)
     assert result.passed
     assert "(not proven, does not refuse) mutation (tier 2)" in render(result)

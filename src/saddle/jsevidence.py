@@ -849,6 +849,19 @@ def _tool_failure(ran: CapturedRun) -> str:
     return f"stryker run exited {ran.exit_code}: {last}"
 
 
+def _ran_by(reach: Reach | None, rel: str, offset: int) -> tuple[str, ...]:
+    """The node test files whose V8 coverage says they ran `rel` at `offset`, sorted:
+    JavaScript's shape of `evidence.mutant_tests`. Empty when the coverage runs
+    recorded nothing readable (`reach` is None) -- the absence of a record, never a
+    claim that no test file ran it -- and never one list shared by every mutant.
+    """
+    if reach is None:
+        return ()
+    return tuple(
+        sorted(test for test, per in reach.ranges.items() if _covered(per.get(rel, ()), offset))
+    )
+
+
 def _outcome(
     report: Mapping[str, Any],
     scratch: Path,
@@ -859,7 +872,8 @@ def _outcome(
     ran_tests: Sequence[str] = (),
 ) -> MutationOutcome:
     files = report["files"]
-    scored: list[tuple[str, str, str, int, str]] = []  # name, status, rel, line, show
+    scored: list[tuple[str, str, str, int, str, tuple[str, ...]]] = []
+    # name, status, rel, line, show, the test files that reached the mutant
     undecided = 0
     for rel, entry in sorted(files.items()):
         wanted = by_file.get(rel)
@@ -879,26 +893,37 @@ def _outcome(
                 undecided += 1
                 continue
             name = f"{rel}:{line}:{mutant['location']['start']['column']} {mutant['mutatorName']}"
-            scored.append((name, status, rel, line, _shown(rel, source, mutant)))
+            scored.append(
+                (
+                    name,
+                    status,
+                    rel,
+                    line,
+                    _shown(rel, source, mutant),
+                    _ran_by(reach, rel, offset),
+                )
+            )
     survivors = [s for s in scored if s[1] not in _KILLED]
     untested = sum(1 for s in scored if s[1] == "NoCoverage")
     tally: dict[str, int] = {}
-    for _, status, _, _, _ in scored:
+    for _, status, _, _, _, _ in scored:
         tally[status] = tally.get(status, 0) + 1
     return MutationOutcome(
         killed=len(scored) - len(survivors),
         total=len(scored),
         generated=len(scored) + undecided,
-        survivors=tuple(name for name, _, _, _, _ in survivors),
-        survivor_lines=tuple(sorted({(spelled[rel], line) for _, _, rel, line, _ in survivors})),
+        survivors=tuple(name for name, _, _, _, _, _ in survivors),
+        survivor_lines=tuple(sorted({(spelled[rel], line) for _, _, rel, line, _, _ in survivors})),
         untested=untested,
         untested_note=untested_note(ran_tests) if untested else "",
         statuses=tuple(sorted(tally.items())),
         survivor_details=tuple(
             (name, status, spelled[rel], line, mutation_text(show), False)
-            for name, status, rel, line, show in survivors
+            for name, status, rel, line, show, _ in survivors
         ),
-        mutant_detail=tuple((name, status, show) for name, status, _, _, show in scored),
+        mutant_detail=tuple(
+            (name, status, show, tests) for name, status, _, _, show, tests in scored
+        ),
         budget_spent=ran.exit_code == SHELL_TIMEOUT,
     )
 
