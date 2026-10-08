@@ -1203,9 +1203,19 @@ function actionRow(card, packet) {
   const discard = actionButton("Discard branch", "act-discard");
   const chat = actionButton("Ask about this run", "act-chat");
   const download = actionButton("Download full report", "act-download");
+  // A stopped run's usual next step is the same task again (#85 item 6): the person's own
+  // Stop, or a stop that asked for them. It starts a new run of the task with the settings
+  // the packet records -- its budgets and whether tests were editable -- and the stopped
+  // packet stays. Never offered on a finished or failed run.
+  const again = actionButton("Run again", "act-again");
+  again.hidden = packet.verdict !== "stopped" || !packet.task;
+  again.onclick = () => {
+    again.disabled = true;
+    launchTask(/** @type {string} */ (packet.task), card.timeBudget, card.tokenBudget, !!packet.test_edits);
+  };
   for (const b of [view, merge, push, discard]) b.disabled = true;
   const why = el("p", "act-why");
-  row.append(view, merge, push, pushBranch, discard, chat, download);
+  row.append(view, merge, push, pushBranch, discard, again, chat, download);
   wrap.append(row, why, panel);
 
   /** @type {BranchInfo | null} */

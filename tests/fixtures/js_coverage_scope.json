@@ -33,6 +33,7 @@
     "tests/test_outside_ui.py",
     "tests/test_process_list_ui.py",
     "tests/test_paint_order.py",
+    "tests/test_run_again_ui.py",
     "tests/test_run_dot_colour_ui.py",
     "tests/test_runs.py",
     "tests/test_steer_ui.py",
