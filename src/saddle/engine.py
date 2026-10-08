@@ -1143,6 +1143,7 @@ def run_turn(
     empty_replies = 0
     announced = False
     waited = False
+    sent_requests = 0
     turn_started = monotonic()
     try:
         # A chat turn has no round cap: it runs until the model answers or the
@@ -1182,6 +1183,7 @@ def run_turn(
             usage: StreamUsage | None = None
             cap, cut = _reply_cap(client, messages, options, once)
             timed_out = False
+            sent_requests += 1
             if options.conversation is not None:
                 options.conversation.record(messages, max_tokens=cap, tools=options.tools)
             sent = perf_counter()
@@ -1246,7 +1248,17 @@ def run_turn(
             if auto is not None:
                 cut = CUT_AT_TIME if timed_out else cut
                 cut = _charge(
-                    options.journal, node_id, auto, reply, reasoning, calls, usage, timing, cap, cut
+                    options.journal,
+                    node_id,
+                    auto,
+                    reply,
+                    reasoning,
+                    calls,
+                    usage,
+                    timing,
+                    cap,
+                    cut,
+                    request=sent_requests,
                 )
                 yield _progress(auto)
                 if timed_out:
@@ -1851,6 +1863,8 @@ def _charge(
     timing: _RoundTiming | None = None,
     cap: int | None = None,
     cut: str = "",
+    *,
+    request: int | None = None,
 ) -> str:
     """Charge one round to the budget and seal the spend, naming its source.
 
@@ -1883,6 +1897,10 @@ def _charge(
         "ttft_ms": timing.ttft_ms if timing is not None else 0,
         **({"max_tokens": cap} if cap is not None else {}),
         **({"cut": cut} if cut else {}),
+        # Which of the turn's requests this round answered: the conversation log's
+        # number for it (#164), so a request with no round (an image-limit retry) is
+        # never joined to the next round's spend.
+        **({"request": request} if request is not None else {}),
     }
     span_id = uuid.uuid4().hex
     # A cut reply's text is sealed beside its spend, so a runaway reply cut at a
