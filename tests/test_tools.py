@@ -85,6 +85,25 @@ def test_reads_and_writes_outside_the_workdir_are_refused(tmp_path: Path) -> Non
     assert run("write_file", tmp_path, path="/etc/evil", content="x").startswith("error:")
 
 
+def test_a_path_outside_says_run_command_reaches_it_where_the_lane_has_run_command(
+    tmp_path: Path,
+) -> None:
+    """#202: a run's prompt invites /tmp and /tmp/evidence, and write_file was told
+    only that the path was outside. The Ask lane has no run_command and is not told
+    to use it."""
+    said = run("write_file", tmp_path, path="/tmp/evidence/x.sh", content="echo\n")
+    assert said == (
+        "error: '/tmp/evidence/x.sh' resolves outside the working directory. write_file "
+        "reaches only the working directory; to read or write a file outside it, such as "
+        "one in /tmp, use run_command (a heredoc writes one)."
+    )
+    ask = ToolContext(workdir=tmp_path, allowed=("read_file", "list_dir", "search"))
+    read = ToolCall(id="r", name="read_file", arguments=json.dumps({"path": "/etc/hosts"}))
+    assert execute_tool(read, workdir=tmp_path, context=ask) == (
+        "error: '/etc/hosts' resolves outside the working directory."
+    )
+
+
 # -- run_command --------------------------------------------------------------
 
 

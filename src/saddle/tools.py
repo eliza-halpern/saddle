@@ -2218,6 +2218,15 @@ def _research_call(ctx: ToolContext, call: ToolCall) -> str:
     return ctx.research.research(question, want, record_id=call.id)
 
 
+OUTSIDE_WORKDIR_HINT: Final = (
+    " {tool} reaches only the working directory; to read or write a file outside it,"
+    " such as one in /tmp, use run_command (a heredoc writes one)."
+)
+"""Added to a path refused as outside the worktree when the lane offers run_command.
+The run prompt invites /tmp and /tmp/evidence, and a model that tried write_file
+there was told only that the path was outside (#202)."""
+
+
 def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None = None) -> str:
     """Run one tool call; every failure becomes an "error: ..." string."""
     ctx = context or ToolContext(workdir=workdir)
@@ -2255,7 +2264,10 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
     ctx.call_name = call.name
     try:
         return handler(ctx, args)
-    except (OutsideRootError, _BadArgumentError) as exc:
+    except OutsideRootError as exc:
+        commands = ctx.allowed is None or "run_command" in ctx.allowed
+        return f"error: {exc}." + (OUTSIDE_WORKDIR_HINT.format(tool=call.name) if commands else "")
+    except _BadArgumentError as exc:
         return f"error: {exc}"
     except IsolationUnavailableError as exc:
         return NO_ISOLATION.format(problem=exc)
