@@ -175,6 +175,16 @@ def test_every_cite_in_a_real_runs_packet_resolves_to_a_ledger_record(repo: Path
     assert packet.payload()["narrative_label"] == NARRATIVE_LABEL
 
 
+def test_the_narrative_row_says_how_a_flagged_sentence_is_shown(repo: Path) -> None:
+    """#85 item 9: the page shows a flagged sentence in normal ink with a note, and the
+    terminal packet leaves the narrative out, so the row never says "struck through"."""
+    packet = compile_packet(run(repo, FIX, **asking_auditor("yes")).journal)
+    (row,) = [r for r in packet.rows if r.key == "narrative"]
+    assert [s.flagged for s in packet.narrative] == [False, True]
+    assert "1 sentence asserting a check result marked as not evidence" in row.text, row.text
+    assert not re.search(r"struck|strike", row.text, re.I), row.text
+
+
 @pytest.mark.parametrize("start", ["main", "master", "detached"])
 def test_the_reproduce_log_runs_from_the_base_the_run_started_on(
     tmp_path: Path, start: str

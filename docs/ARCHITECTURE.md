@@ -324,7 +324,7 @@ planted-bug trees, 49 of 65 for the right reason (measured on `48eb6d6`). The op
    record; the web folds show the full text (`Row.summary`), the terminal packet and the
    chat recap the compact form (`Row.recap`). The Narrative row is the model's `finish`
    summary and is not evidence: sentences that pair a check word with a result word are
-   struck (`packet.flag_narrative`).
+   marked as not evidence (`packet.flag_narrative`).
 
 **Lanes.** The chat (`saddle chat`, the web UI; `saddle up`, the terminal) scopes every
 turn by lane through one function, `tools.scope_turn`: **Ask** (default) offers

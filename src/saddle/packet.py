@@ -216,7 +216,8 @@ def flag_narrative(text: str) -> tuple[Sentence, ...]:
       behaviour" asserts a result with no check noun and is not flagged.
     - It over-flags: "I fixed the failing test" names a check and a result
       and is flagged although it reports an edit. Erring that way costs a
-      struck-through sentence; the other way costs a claim read as evidence.
+      harmless sentence marked as not evidence; the other way costs a claim read
+      as evidence.
     - It judges sentences, not meaning: a result asserted across two
       sentences ("I ran pytest. Everything passed.") is missed in the second.
     """
@@ -1457,8 +1458,9 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             (
                 "Written by the model and labelled as such. "
                 + (
-                    f"{_n(flagged, 'sentence')} asserting a check result struck through: "
-                    "the rows above are the record."
+                    # The page shows such a sentence in normal ink with a note (#85 item 9).
+                    f"{_n(flagged, 'sentence')} asserting a check result marked as not "
+                    "evidence: the rows above are the record."
                     if flagged
                     else "It asserts no check results."
                 )
