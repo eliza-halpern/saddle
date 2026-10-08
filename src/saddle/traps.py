@@ -10,9 +10,10 @@ that way:
   summary (#80a1 r2).
 - misreport, the harness's: finish was told a test had no flip line while its summary
   had a line naming that test (#80a1 r2's node ids).
-- environment, the harness's: the same tests failed at audit after audit on changed
-  trees, and the run never edited their files (#101 r1). Saddle's records keep the
-  failing tests' names, not their failure text, so a missing tool is not read here.
+- environment, the harness's: the same tests failed at the run's first audit and at
+  its last, on trees it changed, in files it never edited (#101 r1). Saddle's records
+  keep the failing tests' names, not their failure text, so a missing tool is not
+  read here.
 - summary-names, the model's: finish returned the summary for naming code that no
   file holds (#191).
 - repeat, the model's: the same calls with the same results three rounds running.
@@ -232,7 +233,12 @@ def _failing(text: str) -> tuple[int, tuple[str, ...]] | None:
 
 
 def environment(seen: Timeline) -> Sign | None:
-    seen_at: dict[tuple[int, tuple[str, ...]], list[tuple[int, str]]] = {}
+    """The same tests failing at the run's first tests audit and at its last: broken
+    from the start and still broken at the end, on trees the run changed, in files it
+    never edited. Failures that come and go in between are the run's own work in
+    progress, even in a test file it did not touch (#101 r3: a tree-wide check that
+    failed at two audits mid-run and passed once the run registered its new file)."""
+    audits: list[tuple[int, str, tuple[int, tuple[str, ...]] | None]] = []
     edited: set[str] = set()
     for round_ in seen.rounds:
         edited.update(_edits(round_))
@@ -243,24 +249,28 @@ def environment(seen: Timeline) -> Sign | None:
                 tree = found.group(1)
         for span in round_.spans:
             finding = tier_finding(span.name, span.detail, span.exit_code)
-            if finding is None or finding.gate != "tests" or finding.verdict != "fail":
+            if finding is None or finding.gate != "tests":
                 continue
-            failing = _failing(finding.detail)
-            if failing is not None and failing[1]:
-                seen_at.setdefault(failing, []).append((round_.number, tree))
-    for (count, names), where in seen_at.items():
-        trees = {tree for _, tree in where if tree}
-        files = {name.split("::")[0] for name in names}
-        if len(where) >= 2 and len(trees) != 1 and not files & edited:
-            on = f"on {len(trees)} trees" if trees else "on trees the records do not name"
-            return Sign(
-                "environment",
-                "harness",
-                tuple(number for number, _ in where),
-                f"the same {count} test(s) failed at {len(where)} audits {on}, none in a "
-                f"file the run edited: {', '.join(names[:3])}",
-            )
-    return None
+            failing = _failing(finding.detail) if finding.verdict == "fail" else None
+            audits.append((round_.number, tree, failing))
+    if len(audits) < 2:
+        return None
+    first, last = audits[0][2], audits[-1][2]
+    if first is None or not first[1] or last != first:
+        return None
+    count, names = first
+    where = [(number, tree) for number, tree, failing in audits if failing == first]
+    trees = {tree for _, tree in where if tree}
+    if len(trees) == 1 or {name.split("::")[0] for name in names} & edited:
+        return None
+    on = f"on {len(trees)} trees" if trees else "on trees the records do not name"
+    return Sign(
+        "environment",
+        "harness",
+        tuple(number for number, _ in where),
+        f"the same {count} test(s) failed at the first audit and the last ({len(where)} in "
+        f"all, {on}), none in a file the run edited: {', '.join(names[:3])}",
+    )
 
 
 def summary_names(seen: Timeline) -> Sign | None:

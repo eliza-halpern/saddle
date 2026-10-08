@@ -543,3 +543,68 @@ def test_a_long_list_of_rounds_is_shortened_in_the_report() -> None:
     same = [round_(n, call("run_command", "exit 1", command="pytest")) for n in range(1, 11)]
     seen = run(*same)
     assert "rounds 1, 2, 3, 4, 5, 6, 7, 8, ...:" in report("r", seen, verdict(seen))
+
+
+# -- environment v2: broken from the start and still broken at the end ---------------
+
+
+PASSING = "'python -m pytest -q' exited 0; impact: 45 of 214 test files ran"
+
+
+def passed(tree: str) -> tuple[SpanRecord, ...]:
+    body = {"detail": PASSING, "gate": "tests", "tier": 1, "verdict": "pass"}
+    return (
+        span("audit-tier1:tests", detail=json.dumps(body)),
+        span("audit:delivered", "checkpoint", detail=f"[audit checkpoint 1 on tree {tree}: PASS]"),
+    )
+
+
+OTHER = FAILING.replace("test_a, tests/test_c.py::test_b", "test_x, tests/test_c.py::test_y")
+
+
+def test_failures_that_come_and_go_mid_run_are_the_runs_own_work_in_progress() -> None:
+    """#101 r3's shape: a different set at the first audit, one set at two audits in
+    the middle, a pass at the end. v1 fired on the middle pair; it was the run's
+    unfinished work, which it then finished."""
+    seen = run(
+        round_(1, spans=audit("aaa", OTHER)),
+        round_(5, spans=audit("bbb")),
+        round_(6, spans=audit("ccc")),
+        round_(9, spans=passed("ddd")),
+    )
+    assert environment(seen) is None
+
+
+@pytest.mark.parametrize(
+    "rounds",
+    [
+        # cleared by the end
+        lambda: (
+            round_(1, spans=audit("aaa")),
+            round_(4, spans=audit("bbb")),
+            round_(7, spans=passed("c")),
+        ),
+        # broken only from the middle on
+        lambda: (
+            round_(1, spans=passed("aaa")),
+            round_(4, spans=audit("bbb")),
+            round_(7, spans=audit("c")),
+        ),
+    ],
+)
+def test_failures_not_there_from_the_first_audit_to_the_last_are_not_the_environment(
+    rounds: Any,
+) -> None:
+    assert environment(run(*rounds())) is None
+
+
+def test_a_passing_audit_in_between_does_not_hide_failures_there_first_and_last() -> None:
+    """An impact-scoped audit can skip the broken tests and pass; the first and the
+    last, which ran them, still name the environment."""
+    seen = run(
+        round_(1, spans=audit("aaa")), round_(4, spans=passed("bbb")), round_(7, spans=audit("ccc"))
+    )
+    sign = environment(seen)
+    assert sign is not None
+    assert sign.rounds == (1, 7)
+    assert "at the first audit and the last (2 in all, on 2 trees)" in sign.why
