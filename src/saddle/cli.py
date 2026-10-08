@@ -1324,6 +1324,23 @@ def _explain_attempt(journal: Path, span: SpanRecord) -> list[str]:
     return lines
 
 
+LEGACY_COMMANDS: Final = frozenset({"run", "dag"})
+"""The multi-node pipeline, kept and labelled legacy (#89): `saddle auto` is the
+lane measured since Phase 2, and these run only on a server with constrained
+decoding. Removing them was the irreversible option, for no user-visible gain."""
+
+LEGACY_DESCRIPTION: Final = (
+    "{what} Legacy and unmeasured: this is the multi-node pipeline, which runs only on "
+    "a server with constrained decoding. `saddle auto` is the supported lane."
+)
+
+LEGACY_NOTICE: Final = (
+    "note: `saddle {command}` is legacy and unmeasured; `saddle auto` is the supported lane "
+    '(docs/CLI.md, "Legacy: saddle run and saddle dag")'
+)
+"""Printed once on stderr each time a legacy command starts."""
+
+
 def run_reasoning(journal: Path, *, stdout: IO[str]) -> int:
     """Print each round's whole reasoning, in order, from its `auto:spend` sidecar
     (#126): every round the run saved reasoning for, under a line naming the round.
@@ -1887,7 +1904,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     doctor = sub.add_parser("doctor", help="Check the server is usable.")
     _add_server_flags(doctor)
-    dag = sub.add_parser("dag", help="Show the plan before it runs.")
+    dag = sub.add_parser(
+        "dag",
+        help="Legacy, unmeasured: show the multi-node plan.",
+        description=LEGACY_DESCRIPTION.format(what="Show the multi-node plan before it runs."),
+    )
     dag.add_argument("task", help="Task description to decompose into a plan.")
     dag.add_argument("--repo", default=".", help="Repository whose files the planner is shown.")
     _add_server_flags(dag)
@@ -2030,7 +2051,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_reference_flag(extract_cmd)
     _add_server_flags(extract_cmd)
-    run = sub.add_parser("run", help="Drive one mechanical task end to end.")
+    run = sub.add_parser(
+        "run",
+        help="Legacy, unmeasured: drive one multi-node task.",
+        description=LEGACY_DESCRIPTION.format(
+            what="Drive one mechanical task end to end through the multi-node pipeline."
+        ),
+    )
     run.add_argument("task", help="Task description to decompose and execute.")
     run.add_argument("--repo", default=".", help="Directory to work in (repo created if missing).")
     run.add_argument("--journal", help="Journal path (default: REPO/.saddle/proofs.jsonl).")
@@ -2582,6 +2609,8 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
+    if args.command in LEGACY_COMMANDS:
+        print(LEGACY_NOTICE.format(command=args.command), file=stderr or sys.stderr)
     if args.command not in (
         "run",
         "doctor",

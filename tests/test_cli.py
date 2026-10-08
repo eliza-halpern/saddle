@@ -345,9 +345,9 @@ def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -
         main(["--help"])
     out = capsys.readouterr().out
     assert "\nDeterministic harness for local LLMs.\n" in out
-    assert "    dag                 Show the plan before it runs.\n" in out
+    assert "    dag                 Legacy, unmeasured: show the multi-node plan.\n" in out
     assert "    doctor              Check the server is usable.\n" in out
-    assert "    run                 Drive one mechanical task end to end.\n" in out
+    assert "    run                 Legacy, unmeasured: drive one multi-node task.\n" in out
     assert "    verify              Audit a journal and re-render its transcript.\n" in out
     assert "    tail                Follow a live run as it happens.\n" in out
     assert "    up                  Open an interactive streaming chat session.\n" in out
@@ -1550,7 +1550,7 @@ def test_main_run_preflight_failure_reports(
 ) -> None:
     _refusing_setup(monkeypatch)
     assert main(["run", "--repo", str(tmp_path), "--yes", TASK]) == 1
-    assert capsys.readouterr().err == (
+    assert capsys.readouterr().err == _legacy("run") + (
         f"error: preflight failed at {DEFAULT_BASE_URL}: server rejected the API key (HTTP 401)\n"
     )
     assert not (tmp_path / ".git").exists()
@@ -1563,7 +1563,7 @@ def test_main_run_preflight_failure_uses_explicit_stderr(
     _refusing_setup(monkeypatch)
     err = io.StringIO()
     assert main(["run", "--repo", str(tmp_path), "--yes", TASK], stderr=err) == 1
-    assert err.getvalue() == (
+    assert err.getvalue() == _legacy("run") + (
         f"error: preflight failed at {DEFAULT_BASE_URL}: server rejected the API key (HTTP 401)\n"
     )
 
@@ -1584,13 +1584,20 @@ def test_main_run_refuses_a_server_that_would_not_constrain(
     monkeypatch.setattr(_FakeClient, "require_constrained_decoding", unconstrained)
     err = io.StringIO()
     assert main(["run", "--repo", str(tmp_path), "--yes", TASK], stderr=err) == 1
-    assert err.getvalue() == (
+    assert err.getvalue() == _legacy("run") + (
         f"error: preflight failed at {DEFAULT_BASE_URL}: "
         "strata reports constrained_decoding: false\n"
     )
     assert _FakeClient.calls == []
     assert not (tmp_path / ".git").exists()
     assert not (tmp_path / ".saddle").exists()
+
+
+def _legacy(command: str) -> str:
+    """The notice a legacy command prints first on stderr (#89)."""
+    from saddle import cli
+
+    return cli.LEGACY_NOTICE.format(command=command) + "\n"
 
 
 def _no_key_message() -> str:
@@ -1607,7 +1614,7 @@ def test_main_run_missing_key_reports(
     monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["run", "--repo", str(tmp_path), "Do it."]) == 1
-    assert capsys.readouterr().err == _no_key_message()
+    assert capsys.readouterr().err == _legacy("run") + _no_key_message()
 
 
 def test_main_run_missing_key_uses_explicit_stderr(
@@ -1617,7 +1624,7 @@ def test_main_run_missing_key_uses_explicit_stderr(
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     err = io.StringIO()
     assert main(["run", "--repo", str(tmp_path), "Do it."], stderr=err) == 1
-    assert err.getvalue() == _no_key_message()
+    assert err.getvalue() == _legacy("run") + _no_key_message()
 
 
 def test_main_run_wires_options_and_defaults(
@@ -1894,6 +1901,10 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                  [--rule-d-retry]\n"
         "                  task\n"
         "\n"
+        "Drive one mechanical task end to end through the multi-node pipeline. Legacy\n"
+        "and unmeasured: this is the multi-node pipeline, which runs only on a server\n"
+        "with constrained decoding. `saddle auto` is the supported lane.\n"
+        "\n"
         "positional arguments:\n"
         "  task                  Task description to decompose and execute.\n"
         "\n"
@@ -1999,6 +2010,10 @@ def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                  task\n"
         "\n"
+        "Show the multi-node plan before it runs. Legacy and unmeasured: this is the\n"
+        "multi-node pipeline, which runs only on a server with constrained decoding.\n"
+        "`saddle auto` is the supported lane.\n"
+        "\n"
         "positional arguments:\n"
         "  task                  Task description to decompose into a plan.\n"
         "\n"
@@ -2025,7 +2040,7 @@ def test_main_dag_missing_key_reports(
     monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["dag", "Do it."]) == 1
-    assert capsys.readouterr().err == _no_key_message()
+    assert capsys.readouterr().err == _legacy("dag") + _no_key_message()
 
 
 def test_main_dag_passes_flags_through(

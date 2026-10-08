@@ -410,6 +410,14 @@ recorded as refusing; the exit code is the audit's. It refuses with exit 2, writ
 nothing, when the ledger does not verify, records no covered commit, `REV` is not on top
 of the covered commit, there are no commits after it, or `--baseline` is given.
 
+## Legacy: saddle run and saddle dag
+
+`saddle run` and `saddle dag` are the Phase 1 multi-node pipeline, kept and labelled
+legacy (#89): `saddle auto` is the supported lane, the one measured since Phase 2. They
+run only on a server with constrained decoding (on one without it, such as Strata, they
+refuse at their preflight), they are not measured, and each prints one notice on stderr
+naming `saddle auto` every time it starts.
+
 ## saddle chat / saddle web
 
 | Flag | Default |

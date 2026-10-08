@@ -28,6 +28,9 @@ Phase 2 adds:
 - `saddle verify --anchor`, which checks each run's outcome against the
   `Saddle-Outcome` trailer on its branch.
 - `saddle audit --tiered`, which runs the same battery on any diff.
+- `saddle run` and `saddle dag`, the Phase 1 multi-node pipeline, are legacy and
+  unmeasured: they need a server with constrained decoding, and `saddle auto` is the
+  supported lane (docs/CLI.md).
 
 - [docs/USING-SADDLE.md](docs/USING-SADDLE.md): install, the Ask / Edit / Task lanes,
   run-state signals, the two questions, how runs end, reading the packet,
