@@ -44,6 +44,15 @@ from typing import Any
 
 CAUGHT = ("killed", "timeout")
 
+# StrykerJS's spellings, as `jsevidence` seals them, read as the mutmut words the
+# rest of this module speaks (#195). Any other status is kept as it was written.
+STRYKER_STATUS = {
+    "Killed": "killed",
+    "Timeout": "timeout",
+    "Survived": "survived",
+    "NoCoverage": "no tests",
+}
+
 KINDS = ("behaviour", "text", "equivalent", "untested")
 
 # What a wrong edit at a mutant of each group would do. Fixed templates: the
@@ -258,7 +267,7 @@ def describe_mutation(
     detail = outcome.get("mutant_detail") or outcome.get("survivor_detail") or []
     lines = []
     for entry in detail:
-        name, status = entry["name"], entry["status"]
+        name, status = entry["name"], STRYKER_STATUS.get(entry["status"], entry["status"])
         path, before, after = parse_show(entry.get("show", ""))
         func = function_of(name)
         kind = classify(status, func, before, after)
