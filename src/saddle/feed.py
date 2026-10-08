@@ -745,9 +745,11 @@ class AuditFeed:
                 if 1 in tiers
                 else None
             )
-            if flips is not None and failing(flips) and 2 in tiers and self.feedback:
+            if flips is not None and failing(flips) and 2 in tiers and self.feedback and not check:
                 # Cheap, and the same on a retry of this tree: refused before
-                # the suite runs, as an edit check is.
+                # the suite runs, as an edit check is. Never for a `check`: its
+                # `flip:` lines can only come with finish's summary, so a check
+                # asked for mutation would be refused it until finish (#80a1 r2).
                 return AuditResult(point, tree, (*found, flips), note=FLIPS_FIRST, untracked=copied)
             prime = getattr(self.auditor, "prime", None)
             if 1 in tiers and 2 in tiers and prime is not None:

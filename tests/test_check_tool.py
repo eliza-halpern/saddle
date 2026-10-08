@@ -36,6 +36,7 @@ from saddle.feed import (
     CHECK_SPAN,
     CHECK_UNCHANGED,
     EDIT_CHECKS_FIRST,
+    FLIPS_FIRST,
     ONLY_FINISH_CLEARS,
     WHOLE_SUITE_TOOK,
     _took,
@@ -735,3 +736,29 @@ def test_a_check_whose_suite_was_skipped_claims_neither_its_cost_nor_that_nothin
     assert EDIT_CHECKS_FIRST in said, said
     assert "whole-suite check took" not in said, said
     assert ONLY_FINISH_CLEARS not in said, said
+
+
+def test_a_check_asked_for_mutation_runs_it_before_the_flip_lines_and_finish_still_waits(
+    repo: Path,
+) -> None:
+    """#80a1 r2 asked twice for mutation on a tree with a changed pre-existing test. Each
+    check was refused its suite and mutation until a `flip:` line it could only give at
+    finish ("Write the line ... on the next audit"). A check now runs them; finish, with
+    no flip line, is still refused before the suite (`FLIPS_FIRST`)."""
+    whole_mutation = call(CHECK_TOOL, "m", whole_suite=True, mutation=True)
+    client = Reading(
+        [
+            [edit("e", "a - b", "a + b")],
+            [edit("t", "add(2, 2) == 4", "add(2, 3) == 5", path="tests/test_calc.py")],
+            [whole_mutation],
+        ]
+    )
+    fake = WholeSuiteAuditor()
+    run(repo, client, auditor=fake, allow_test_edits=True)
+    said = client.read["m"]
+    assert FLIPS_FIRST not in said, said
+    assert "test-changes (tier 1): fail" in said, said  # still said, beside the rest
+    assert 2 in fake.tiers(), fake.calls  # mutation ran, for the check: finish skips it
+    finished = [f for f in client.read.values() if f.startswith(FINISH_REFUSED)]
+    assert finished, client.read
+    assert FLIPS_FIRST in finished[0], finished[0]
