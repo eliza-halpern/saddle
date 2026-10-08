@@ -108,8 +108,24 @@ def test_a_skipped_chrome_run_is_not_proven_never_covered(tmp_path: Path) -> Non
     assert got.verdict == "not-proven"
     assert got.detail == (
         "not proven: not line-measured: static/p.js (1 Chrome tests skipped, and a skip"
-        " leaves every page line unproven: run the `chrome_tests` and make each one run)"
+        " leaves every page line unproven: run the `chrome_tests` and make each one run;"
+        " pytest's reasons: 1 at tests/test_page.py:5: needs node and google-chrome)"
     )
+
+
+def test_each_skip_reason_pytest_gives_is_named_and_none_adds_nothing() -> None:
+    """A dogfood run read "3 Chrome tests skipped" with no word of which or why."""
+    output = (
+        "..s.ss\n=== short test summary info ===\n"
+        "SKIPPED [2] tests/chrome_page.py:91: needs node and google-chrome\n"
+        "SKIPPED [1] tests/test_outside_ui.py:55: needs curl\n"
+        "3 passed, 3 skipped in 4.2s\n"
+    )
+    assert jsevidence.skip_reasons(output) == (
+        "; pytest's reasons: 2 at tests/chrome_page.py:91: needs node and google-chrome;"
+        " 1 at tests/test_outside_ui.py:55: needs curl"
+    )
+    assert jsevidence.skip_reasons("3 passed, 3 skipped in 4.2s\n") == ""
 
 
 def test_a_chrome_run_that_left_no_coverage_is_not_proven(tmp_path: Path) -> None:

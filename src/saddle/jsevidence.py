@@ -444,6 +444,18 @@ def measure_coverage(
             return JsCoverage(problem=f"the c8 report did not parse: {exc}")
 
 
+_SKIP_REASON: Final = re.compile(r"^SKIPPED \[(\d+)\] (.+?): (.+)$", re.M)
+"""One line of pytest's `-rs` summary: how many skipped, where, and why."""
+
+
+def skip_reasons(output: str) -> str:
+    """pytest's own reason for each skip in `output` (its `-rs` summary), as the
+    finding's last clause: a dogfood run read "3 Chrome tests skipped" and could
+    only guess which three, and why, while pytest knew both."""
+    found = [f"{m.group(1)} at {m.group(2)}: {m.group(3)}" for m in _SKIP_REASON.finditer(output)]
+    return f"; pytest's reasons: {'; '.join(found)}" if found else ""
+
+
 def measure_chrome_coverage(
     workdir: Path,
     tests: Sequence[str],
@@ -480,6 +492,7 @@ def measure_chrome_coverage(
                 "-m",
                 "pytest",
                 "-q",
+                "-rs",
                 "--no-cov",
                 "-p",
                 "no:cacheprovider",
@@ -508,6 +521,7 @@ def measure_chrome_coverage(
             why = (
                 f"{skipped.group(1)} Chrome tests skipped, and a skip leaves every page"
                 " line unproven: run the `chrome_tests` and make each one run"
+                + skip_reasons(ran.stdout)
                 if skipped
                 else NO_CHROME
             )
