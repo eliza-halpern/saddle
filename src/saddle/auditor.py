@@ -622,19 +622,55 @@ MUTATION_DATA_ONLY: Final = (
     "against the change and no edit can clear it: a person reviews the data."
 )
 """The mutation finding when mutmut generated nothing and every changed source
-line is a module-level literal constant (`data_only_change`): not proven, never
-a refusal. A correct change that added one entry to a tuple of module names was
-refused "no mutants on changed lines", and the model rewrote it into a function
-body to give the gate something to mutate. Module-level code that is not a
-literal (a call, a loop, a comprehension) still fails: that is where the fail
-exists for, a module mutmut cannot reach passing an infinite loop."""
+line is module-level data (`data_only_change`): not proven, never a refusal. A
+correct change that added one entry to a tuple of module names was refused "no
+mutants on changed lines", and the model rewrote it into a function body to give
+the gate something to mutate. Module-level code that computes (a call other than
+a container's own constructor, a loop, a comprehension) still fails: that is
+where the fail exists for, a module mutmut cannot reach passing an infinite loop."""
+
+_DATA_CONSTRUCTORS: Final = frozenset({"frozenset", "tuple", "set", "list", "dict"})
+"""The calls that build a container of data and compute nothing else."""
+
+
+def _pure_data(node: ast.expr) -> bool:
+    """Whether `node` is data built only from literals, names (other module-level
+    data, a function or a class it refers to), containers of them, operators on
+    them, and the containers' own constructors. A table that maps suffixes to named
+    constants is data (#132a r1: refused, though mutmut mutates no module-level
+    code); a call to anything else computes, and so does a comprehension."""
+    if isinstance(node, ast.Constant | ast.Name):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _pure_data(node.value)
+    if isinstance(node, ast.Tuple | ast.List | ast.Set):
+        return all(_pure_data(e) for e in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(k is None or _pure_data(k) for k in node.keys) and all(
+            _pure_data(v) for v in node.values
+        )
+    if isinstance(node, ast.Starred):
+        return _pure_data(node.value)
+    if isinstance(node, ast.UnaryOp):
+        return _pure_data(node.operand)
+    if isinstance(node, ast.BinOp):
+        return _pure_data(node.left) and _pure_data(node.right)
+    if isinstance(node, ast.Call):
+        return (
+            isinstance(node.func, ast.Name)
+            and node.func.id in _DATA_CONSTRUCTORS
+            and all(_pure_data(a) for a in node.args)
+            and all(_pure_data(k.value) for k in node.keywords)
+        )
+    return False
 
 
 def data_only_change(copy: Path, baseline: str) -> list[str]:
     """The changed source files, when every changed line in them sits in a
-    module-level assignment of a literal value; else []. Test files are not
-    source, nor is any other test code (`is_test_code`). No changed source line
-    at all is [] too: there is no data to name."""
+    module-level assignment of data (`_pure_data`) or in a module-level string,
+    such as the docstring under a constant; else []. Test files are not source, nor
+    is any other test code (`is_test_code`). No changed source line at all is []
+    too: there is no data to name."""
     changed = changed_statements(copy, git_diff(copy, baseline))
     by_file: dict[str, set[int]] = {}
     root = f"{copy}{os.sep}"
@@ -648,10 +684,12 @@ def data_only_change(copy: Path, baseline: str) -> list[str]:
         literal: set[int] = set()
         for node in module.body:
             if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
-                try:
-                    ast.literal_eval(node.value)
-                except ValueError:
-                    continue
+                data = _pure_data(node.value)
+            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                data = isinstance(node.value.value, str)
+            else:
+                data = False
+            if data:
                 literal.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
         if not lines <= literal:
             return []

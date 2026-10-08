@@ -99,3 +99,89 @@ def test_data_only_change_reads_every_changed_source_line(tmp_path: Path) -> Non
     # Only a test changed: no source data to name.
     (root / "n.py").write_text(BASE)
     assert data_only_change(root, "HEAD") == []
+
+
+# -- data built from names: #132a r1 ------------------------------------------------
+
+TABLE_BASE = (
+    "from typing import Final\n\n"
+    'CSS: Final = "css"\n'
+    "SUFFIX: Final = {\n"
+    '    ".css": CSS,\n'
+    "}\n"
+    "NAMES: Final = frozenset({CSS})\n"
+    '"""The names a project may use."""\n\n\n'
+    "def classify(suffix):\n    return SUFFIX.get(suffix, 'other')\n"
+)
+TABLE_HEAD = (
+    "from typing import Final\n\n"
+    'CSS: Final = "css"\n'
+    'SQL: Final = "sql"\n'
+    "SUFFIX: Final = {\n"
+    '    ".css": CSS,\n'
+    '    ".sql": SQL,\n'
+    "}\n"
+    "NAMES: Final = frozenset({CSS, SQL})\n"
+    '"""The names a project may use, sql among them."""\n\n\n'
+    "def classify(suffix):\n    return SUFFIX.get(suffix, 'other')\n"
+)
+TABLE_TEST = (
+    "from n import NAMES, classify\n\n\n"
+    "def test_sql():\n    assert classify('.sql') == 'sql'\n    assert 'sql' in NAMES\n"
+)
+
+
+def table_tree(tmp_path: Path, head: str) -> Path:
+    root = tmp_path / "table"
+    _init(root, {"n.py": TABLE_BASE, "test_n.py": "def test_x():\n    assert True\n"})
+    (root / "n.py").write_text(head)
+    (root / "test_n.py").write_text(TABLE_TEST)
+    return root
+
+
+def test_a_table_of_named_constants_is_data_and_its_change_is_not_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#132a r1's change, in miniature: a constant, a dict entry naming it, a
+    frozenset of names and the docstring under it. Correct and data only; the old
+    rule (literals only) refused it "no mutants on changed lines"."""
+    sampled(NOTHING, monkeypatch)
+    root = table_tree(tmp_path, TABLE_HEAD)
+    assert data_only_change(root, "HEAD") == ["n.py"]
+    verdict, detail, passed = mutation(root)
+    assert verdict == "not-proven"
+    assert detail.startswith("not proven: the source this change touches is module-level")
+    assert passed
+
+
+@pytest.mark.parametrize(
+    "value", ["frozenset({CSS}) | {SQL}", "(*NAMES, SQL)", "{**{'.css': CSS}, '.sql': SQL}", "-1"]
+)
+def test_operators_and_unpacking_over_data_are_data(tmp_path: Path, value: str) -> None:
+    head = TABLE_BASE.replace("NAMES: Final = frozenset({CSS})", f"NAMES: Final = {value}")
+    head = head.replace('CSS: Final = "css"\n', 'CSS: Final = "css"\nSQL: Final = "sql"\n')
+    assert data_only_change(table_tree(tmp_path, head), "HEAD") == ["n.py"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "frozenset(sorted({CSS}))",  # a call that is not a container's constructor
+        "load_names()",
+        "{n for n in (CSS,)}",
+        "SUFFIX['.css']",
+        "frozenset(name=load_names())",
+    ],
+)
+def test_module_level_code_that_computes_is_not_data(tmp_path: Path, value: str) -> None:
+    """Still refused as before (test_module_level_code_that_is_not_a_literal_still_fails
+    pins the finding for a tree whose tests pass)."""
+    head = TABLE_BASE.replace("NAMES: Final = frozenset({CSS})", f"NAMES: Final = {value}")
+    assert data_only_change(table_tree(tmp_path, head), "HEAD") == []
+
+
+def test_a_changed_module_level_statement_that_is_not_an_assignment_is_not_data(
+    tmp_path: Path,
+) -> None:
+    head = TABLE_BASE.replace('"""The names a project may use."""', "for _ in ():\n    pass")
+    assert data_only_change(table_tree(tmp_path, head), "HEAD") == []
