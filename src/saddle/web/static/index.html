@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <div id="app">
   <div id="scrim" hidden></div>
-  <aside id="sidebar">
+  <aside id="sidebar" aria-label="Sessions">
     <div class="side-head">
       <span class="brand">saddle</span>
       <button type="button" id="settings" title="Settings and personas">⚙</button>
@@ -266,6 +266,15 @@
     <button id="rewind-go" type="button" class="primary">Run again</button>
   </div>
 </dialog>
+<!-- A research call's full text (#93): what the reader reported and read, as text. -->
+<aside id="research-panel" hidden aria-labelledby="research-title">
+  <header class="research-head">
+    <h2 id="research-title">Web research</h2>
+    <span class="research-untrusted">untrusted pages, not evidence</span>
+    <button id="research-close" type="button">Close</button>
+  </header>
+  <div id="research-body"></div>
+</aside>
 <script src="/static/markdown.js"></script>
 <script src="/static/tasks.js"></script>
 <script src="/static/notify.js"></script>

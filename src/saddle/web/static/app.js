@@ -87,6 +87,7 @@
  *   "#rewind-text": HTMLTextAreaElement,
  *   "#rewind-cancel": HTMLButtonElement,
  *   "#rewind-go": HTMLButtonElement,
+ *   "#research-close": HTMLButtonElement,
  * }} IdTypes
  */
 
@@ -304,6 +305,7 @@ function finishTool(event) {
   fillToolDetail(row.details, row.detail, event.detail);
   markUnsandboxed(row.details, event.detail);
   if (event.preview) showPreview(row.details, event.preview, event.version);
+  if (row.name === "research" && event.ok) offerResearch(row.details, event.id);
   if (!event.ok) row.details.open = true; // a failure should not need a click
 }
 
@@ -647,9 +649,84 @@ function pastToolRow(call) {
   // set textContent directly.
   fillToolDetail(details, detail, call.detail);
   markUnsandboxed(details, call.detail);
+  if (call.name === "research" && call.ok) offerResearch(details, call.id);
   details.appendChild(detail);
   return details;
 }
+
+/* A research call's full text, kept for the person (#93): the acting model got a cited
+   summary or a value; the panel shows what the reader reported, the summary it wrote
+   before any cut, and every page it read. The pages are untrusted, so every string is
+   set as text, never as markup, and an address is never made a link. */
+/**
+ * @param {HTMLElement} details
+ * @param {string} callId
+ */
+function offerResearch(details, callId) {
+  const open = el("button", "research-open", "Full text");
+  open.type = "button";
+  // A <button> in the row's summary does not fold the row: the click's activation is the
+  // button's, not the summary's. Any other element there would toggle the row.
+  open.onclick = () => openResearch(callId);
+  /** @type {Element} */ (details.querySelector("summary")).appendChild(open);
+}
+
+/** @param {string} callId */
+async function openResearch(callId) {
+  const body = $("#research-body");
+  body.textContent = "";
+  $("#research-panel").hidden = false;
+  $("#research-close").focus();
+  try {
+    paintResearch(body, await api(`/api/sessions/${state.sessionId}/research/${encodeURIComponent(callId)}`));
+  } catch (error) {
+    body.appendChild(el("p", "research-note", errorText(error)));
+  }
+}
+
+/**
+ * @param {HTMLElement} body
+ * @param {any} record what `research.Researcher._keep` wrote
+ */
+function paintResearch(body, record) {
+  body.appendChild(el("h3", null, "Question"));
+  body.appendChild(el("p", "research-question", record.question));
+  const report = record.report;
+  body.appendChild(el("h3", null, "What the reader reported"));
+  if (!report) {
+    body.appendChild(el("p", "research-note", `It ended without a report: ${record.error}`));
+  } else if (report.kind === "summary") {
+    if (report.full_summary) {
+      body.appendChild(el("p", "research-note", "The acting model was given this cut to fit; here is all of it."));
+    }
+    body.appendChild(el("p", "research-summary", report.full_summary || report.summary));
+    const sources = el("ol", "research-sources");
+    for (const url of report.sources) sources.appendChild(el("li", null, url));
+    for (const [url, why] of report.unread)
+      sources.appendChild(el("li", "research-unread", `${url}: not read (${why})`));
+    body.appendChild(sources);
+  } else if (report.kind === "value") {
+    body.appendChild(el("p", "research-summary", `${report.value_type}: ${report.value}`));
+  } else {
+    body.appendChild(el("p", "research-note", `Nothing found: ${report.reason}`));
+  }
+  body.appendChild(el("h3", null, `What the reader read (${record.read.length})`));
+  record.read.forEach((/** @type {string} */ text, /** @type {number} */ i) => {
+    const page = el("details", "research-page");
+    page.appendChild(el("summary", null, `${i + 1}. ${text.split("\n", 1)[0].slice(0, 120)}`));
+    page.appendChild(el("pre", null, text));
+    body.appendChild(page);
+  });
+}
+
+function closeResearch() {
+  $("#research-panel").hidden = true;
+}
+
+$("#research-close").onclick = closeResearch;
+$("#research-panel").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeResearch();
+});
 
 /**
  * @param {HTMLElement} turn

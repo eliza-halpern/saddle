@@ -47,7 +47,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from saddle import capabilities, conditions
+from saddle import capabilities, conditions, research
 from saddle.agents_md import chat_instructions
 from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET, AutoError, repo_root
 from saddle.engine import TurnOptions, _user_message
@@ -1551,6 +1551,22 @@ def build_app(
             {"branch": branch, "files": [{"path": f.path, "patch": f.patch} for f in files]}
         )
 
+    async def research_record(request: Request) -> JSONResponse:
+        """One research call's full text (#93): the record `Researcher._keep` wrote, for the
+        page's side panel. Untrusted web content, sent as data the page shows as text."""
+        sid = request.path_params["sid"]
+        path = research.record_path(
+            store.downloads_dir(sid).parent / research.RESEARCH_RECORDS,
+            request.path_params["call"],
+        )
+        try:
+            record = json.loads(path.read_text()) if path is not None else None
+        except (OSError, ValueError):
+            record = None
+        if not isinstance(record, dict):
+            return JSONResponse({"error": "This call's full text was not kept."}, 404)
+        return JSONResponse(record)
+
     async def task_changes(request: Request) -> JSONResponse:
         """A live run's changes so far: its worktree against its base (#85 item 11)."""
         run = _task(request)
@@ -1813,6 +1829,7 @@ def build_app(
             Route("/api/sessions/{sid}/tasks/{rid}/branch", task_branch),
             Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
             Route("/api/sessions/{sid}/tasks/{rid}/changes", task_changes),
+            Route("/api/sessions/{sid}/research/{call}", research_record),
             Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/approve", task_approve, methods=["POST"]),
             Route(

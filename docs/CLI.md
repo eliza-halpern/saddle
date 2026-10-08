@@ -607,6 +607,12 @@ full-access one, and without `bwrap` there is no reader.
   number, each matched whole by a pattern), a short cited summary (citing pages
   it read, never repeating a run of page text), or the path, size, source and
   hash of a download. Never raw page text.
+- The full text stays with you: each call's record, `<session>/research/<call id>.json`
+  (`research.Researcher._keep`), holds the reader's whole report (the summary as it
+  wrote it, before any cut to fit) and every page it read, secret-shaped spans
+  redacted. In the web chat the call's tool row offers **Full text**, which opens it in
+  a side panel beside the transcript, shown as text, never as markup, with no link to
+  follow. The acting model is never given the record.
 - A download over 10 MiB is withheld, and deleted, unless you approve it in the
   page. The approval comes after the bytes land in the area the acting session
   cannot read and before it is told they exist.

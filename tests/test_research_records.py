@@ -98,3 +98,33 @@ def test_a_record_that_cannot_be_written_leaves_nothing_behind(rig: Rig) -> None
     rig.researcher.records_dir.write_text("a file where the directory should be")
     rig.researcher._keep("call_4", "q", "summary", "answer", "nothing found", ReaderGate())
     assert rig.researcher.records_dir.read_text() == "a file where the directory should be"
+
+
+def test_the_page_is_served_its_own_sessions_records_and_nothing_else(tmp_path: Path) -> None:
+    from starlette.testclient import TestClient
+    from test_ui3_mode import NoModel
+
+    from saddle.sessions import SessionStore
+    from saddle.web.app import build_app
+
+    store = SessionStore(tmp_path / "s")
+    sid = store.create(title="t", workdir=str(tmp_path)).id
+    other = store.create(title="o", workdir=str(tmp_path)).id
+    records = store.downloads_dir(sid).parent / RESEARCH_RECORDS
+    records.mkdir(parents=True)
+    (records / "call_9.json").write_text(json.dumps({"question": "q", "read": []}))
+    (records / "broken.json").write_text("{not json")
+    # A file the check must keep out of reach: ".hidden" is no record id.
+    (records / ".hidden.json").write_text(json.dumps({"question": "never served"}))
+    with TestClient(build_app(store, NoModel, default_workdir=tmp_path)) as client:
+        got = client.get(f"/api/sessions/{sid}/research/call_9")
+        elsewhere = client.get(f"/api/sessions/{other}/research/call_9")
+        missing = client.get(f"/api/sessions/{sid}/research/call_0")
+        dotted = client.get(f"/api/sessions/{sid}/research/.call_9")
+        broken = client.get(f"/api/sessions/{sid}/research/broken")
+        hidden = client.get(f"/api/sessions/{sid}/research/.hidden")
+    assert got.status_code == 200, got.text
+    assert got.json() == {"question": "q", "read": []}
+    for answer in (elsewhere, missing, dotted, broken, hidden):
+        assert answer.status_code == 404, answer.text
+        assert answer.json() == {"error": "This call's full text was not kept."}

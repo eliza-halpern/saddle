@@ -750,6 +750,15 @@ _RECORD_ID: Final = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
 """A record's name is its tool call's id, which the model wrote: one path segment at most."""
 
 
+def record_path(records_dir: Path, record_id: str | None) -> Path | None:
+    """Where the record of the research call `record_id` lives, or None when the id is
+    missing or more than one path segment (`_RECORD_ID`): the writer and the page's
+    endpoint both ask here, so neither builds a path from an id it has not checked."""
+    if record_id is None or _RECORD_ID.fullmatch(record_id) is None:
+        return None
+    return records_dir / f"{record_id}.json"
+
+
 @dataclass
 class Researcher:
     """A session's reader: its servers, its download area and what it brought back."""
@@ -912,7 +921,8 @@ class Researcher:
         call with no id, or an id that is more than one path segment; a write that fails
         leaves no record, and the page then says the full text was not kept.
         """
-        if record_id is None or _RECORD_ID.fullmatch(record_id) is None:
+        path = record_path(self.records_dir, record_id)
+        if path is None:
             return
         report: dict[str, Any] | None = None
         if isinstance(outcome, Report):
@@ -931,7 +941,6 @@ class Researcher:
             "visited": list(gate.visited),
             "blocked": gate.blocked_lines(),
         }
-        path = self.records_dir / f"{record_id}.json"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             scratch = path.with_name(f".{path.name}.part")
