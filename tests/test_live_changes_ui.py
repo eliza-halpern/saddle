@@ -44,12 +44,27 @@ await page.until(async (sid) => {
 const offered = await page.js(() => [...document.querySelectorAll(".task-card button")]
   .filter((b) => !b.closest("[hidden]") && b.getClientRects().length > 0)
   .map((b) => b.textContent.trim()));
+const look = await page.js(() => {
+  const read = (sel) => {
+    const node = document.querySelector(`.task-card ${sel}`);
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return {
+      font: style.fontSize, padding: style.padding, radius: style.borderRadius,
+      background: style.backgroundColor, left: box.left, right: box.right, top: box.top,
+    };
+  };
+  const head = document.querySelector(".task-card .task-head").getBoundingClientRect();
+  return { changes: read(".task-changes"), stop: read(".task-stop"), headRight: head.right };
+});
 await page.js(() => document.querySelector(".task-card .task-changes").click());
 await page.until(() => !!document.querySelector(".task-card .task-live .diff-file"));
-const going = await page.js((offered) => {
+const going = await page.js((offered, look) => {
   const card = document.querySelector(".task-card");
-  return { offered, state: card.dataset.state, live: card.querySelector(".task-live").innerText };
-}, offered);
+  return {
+    offered, look, state: card.dataset.state, live: card.querySelector(".task-live").innerText,
+  };
+}, offered, look);
 await page.js(() => document.querySelector(".task-card .task-changes").click());
 await page.until(() => document.querySelector(".task-card .task-live").hidden);  // folded away
 await page.js(() => document.querySelector(".task-card .task-stop").click());
@@ -101,7 +116,19 @@ def test_a_running_card_shows_its_changes_so_far_and_keeps_running(
                     thread.join(timeout=0.5)
     assert "Changes so far" in out["offered"], out["offered"]
     assert "Stop" in out["offered"], out["offered"]
+    _beside_stop(out["look"])
     assert out["state"] == "running", out
     assert LIVE_FILE in out["live"], out["live"]
     assert LIVE_TEXT in out["live"], out["live"]
     assert out["ended"] == {"changes": False, "live": False}, out["ended"]  # its packet's now
+
+
+def _beside_stop(look: dict[str, Any]) -> None:
+    """The control wears Stop's look and sits just left of it, on its row."""
+    changes, stop = look["changes"], look["stop"]
+    for prop in ("font", "padding", "radius", "background"):
+        assert changes[prop] == stop[prop], (prop, changes, stop)
+    assert 0 <= stop["left"] - changes["right"] <= 12, (changes, stop)  # the head's 10px gap
+    assert abs(changes["top"] - stop["top"]) <= 1, (changes, stop)
+    # ...and the pair is at the head's right end, where Stop always was (its 14px padding).
+    assert look["headRight"] - stop["right"] <= 15, (look["headRight"], stop)

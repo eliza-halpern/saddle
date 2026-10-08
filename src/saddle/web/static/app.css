@@ -628,10 +628,10 @@ main { position: relative; }
   border-radius: 9px; padding: 5px 8px; font: 12.5px var(--mono); }
 .tc-row input:focus { border-color: var(--run); }
 .tc-spacer { flex: 1; }
-.tc-row button, .ask-send, .task-stop { background: var(--bg-sunk); color: var(--ink-dim);
+.tc-row button, .ask-send, .task-stop, .task-changes { background: var(--bg-sunk); color: var(--ink-dim);
   border: 1px solid var(--line); border-radius: 11px; padding: 7px 14px; cursor: pointer;
   font: inherit; font-size: 13px; transition: border-color .14s, color .14s; }
-.tc-row button:hover, .task-stop:hover { color: var(--ink); border-color: var(--ink-faint); }
+.tc-row button:hover, .task-stop:hover, .task-changes:hover { color: var(--ink); border-color: var(--ink-faint); }
 .tc-row button.primary { background: var(--run); color: var(--bg); border-color: transparent;
   font-weight: 700; }
 
@@ -664,6 +664,9 @@ main { position: relative; }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 var(--wash-run) } 50% { box-shadow: 0 0 0 5px #a8d0f033 } }
 .task-id { font: 11.5px var(--mono); color: var(--ink-faint); }
 .task-stop { margin-left: auto; padding: 4px 11px; font-size: 12px; }
+/* "Changes so far" sits beside Stop on the right, in Stop's shape (#85 item 11). */
+.task-changes { margin-left: auto; padding: 4px 11px; font-size: 12px; }
+.task-changes:not([hidden]) + .task-stop { margin-left: 0; } /* the head's own gap */
 .task-stop:hover { color: var(--halt) !important; border-color: var(--halt) !important; }
 
 .task-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; padding: 2px 14px 10px; }
