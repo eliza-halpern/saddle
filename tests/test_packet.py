@@ -23,6 +23,7 @@ import pytest
 from packet_seed import make_repo, seed
 
 from saddle import mutant_text
+from saddle import packet as packet_module
 from saddle.auditor import Finding, Findings
 from saddle.auto import AutoOptions, AutoResult, ledger_path, run_auto
 from saddle.cli import run_verify
@@ -183,6 +184,19 @@ def test_the_narrative_row_says_how_a_flagged_sentence_is_shown(repo: Path) -> N
     assert [s.flagged for s in packet.narrative] == [False, True]
     assert "1 sentence asserting a check result marked as not evidence" in row.text, row.text
     assert not re.search(r"struck|strike", row.text, re.I), row.text
+
+
+def test_the_payload_says_how_the_outcome_counted_its_tokens(tmp_path: Path) -> None:
+    """#85 item 4: the card marks an estimated count with "~" and a measured one with
+    nothing, so the payload carries the sealed outcome's token source when it is known."""
+    repo = make_repo(tmp_path / "repo")
+    _sid, rid, _branch = seed(SessionStore(tmp_path / "s"), repo, "audited")
+    packet = compile_packet(ledger_path(repo, rid))
+    assert packet.payload()["token_source"] == "usage"  # the seed seals a measured count
+    assert "token_source" not in replace(packet, token_source=None).payload()
+    assert packet_module._token_source({"token_source": "usage"}) == "usage"
+    assert packet_module._token_source({"token_source": "a guess"}) is None
+    assert packet_module._token_source({}) is None
 
 
 @pytest.mark.parametrize("start", ["main", "master", "detached"])

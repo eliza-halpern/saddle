@@ -91,6 +91,9 @@ CLAIMS: Final = frozenset({"proven", "failed", "observed", "question", "cost"})
 
 NARRATIVE_LABEL: Final = "narrative, not evidence"
 
+TOKEN_SOURCES: Final = ("usage", "estimate", "mixed", "none")
+"""How an outcome sidecar may say its tokens were counted; `_spend` words each one."""
+
 TEST_COMMAND: Final = re.compile(r"\b(pytest|py\.test|unittest|tox|nox|make\s+test|check\.sh)\b")
 
 # A sentence that asserts a check's result: a check noun and a result word in
@@ -171,6 +174,10 @@ class Packet:
     """The sealed outcome's own numbers -- `elapsed_s`, `time_budget_s`,
     `tokens`, `token_budget` -- for the card's meters; None without an
     outcome record. The Cost row says the same in words."""
+    token_source: str | None = None
+    """How the sealed outcome counted its tokens (`usage`, `estimate`, `mixed`,
+    `none`), so the card marks an estimate with "~" and a measured count with
+    nothing (#85 item 4); None when the outcome records no known source."""
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -197,6 +204,7 @@ class Packet:
             "test_edits": self.test_edits,
             "offer_test_edits": self.offer_test_edits,
             "spend": self.spend,
+            **({"token_source": self.token_source} if self.token_source else {}),
             **({"questions": list(self.questions)} if self.questions else {}),
             **({"guarded_paths": list(self.guarded_paths)} if self.guarded_paths else {}),
         }
@@ -759,7 +767,7 @@ def _spend(evidence: dict[str, Any]) -> _Spend | None:
     """
     source = evidence.get("token_source")
     spent = evidence.get("tokens_spent")
-    if not isinstance(spent, int | float) or source not in ("usage", "estimate", "mixed", "none"):
+    if not isinstance(spent, int | float) or source not in TOKEN_SOURCES:
         old = evidence.get("tokens_spent_estimate")
         if not isinstance(old, int | float):
             return None
@@ -807,6 +815,12 @@ def _meters(evidence: dict[str, Any]) -> dict[str, float] | None:
         if isinstance(v, int | float) and not isinstance(v, bool)
     }
     return numbers if "elapsed_s" in numbers else None
+
+
+def _token_source(evidence: dict[str, Any]) -> str | None:
+    """The outcome's own word for how its tokens were counted, if it is one `_spend` reads."""
+    source = evidence.get("token_source")
+    return source if source in TOKEN_SOURCES else None
 
 
 def _unresolved(evidence: dict[str, Any]) -> list[str]:
@@ -1545,6 +1559,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         questions=_asked(audits, evidence) if verdict == "needs_you" and outcome else (),
         guarded_paths=guarded,
         spend=_meters(evidence) if evidence is not None else None,
+        token_source=_token_source(evidence) if evidence is not None else None,
         records={
             h: display_record(e)
             for h in cited

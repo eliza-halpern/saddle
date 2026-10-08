@@ -83,7 +83,7 @@ function paintRunStatus(reported) {
   }
 }
 
-/** @typedef {{box: HTMLElement, fill: HTMLElement, value: HTMLElement}} Meter */
+/** @typedef {{box: HTMLElement, track: HTMLElement, fill: HTMLElement, value: HTMLElement}} Meter */
 
 /**
  * The model-activity strip's parts and counters (see activityStrip).
@@ -131,6 +131,8 @@ function paintRunStatus(reported) {
  * @property {number} timeBudget
  * @property {number} tokenBudget
  * @property {number} spent
+ * @property {string | null} tokenSource the sealed outcome's token source, "usage" when
+ *   the server counted every token; null while a run is going (#85 item 4)
  * @property {number} timer
  * @property {number} count
  * @property {string} phase
@@ -168,6 +170,7 @@ function paintRunStatus(reported) {
  * @property {string[]} [questions]
  * @property {boolean | null} [test_edits]
  * @property {Spend} [spend]
+ * @property {string} [token_source]
  * @property {boolean} [offer_test_edits]
  */
 
@@ -204,7 +207,7 @@ function meter(label) {
   box.appendChild(track);
   const value = el("span", "tmeter-value", "—");
   box.appendChild(value);
-  return { box, fill, value };
+  return { box, track, fill, value };
 }
 
 /**
@@ -214,6 +217,9 @@ function meter(label) {
  * @param {string} text
  */
 function setMeter(m, used, limit, text) {
+  // With no limit there is nothing to fill: an empty track would read as a cap that
+  // does not exist (runs have no budget by default), so it is not drawn (#85 item 4).
+  m.track.hidden = !(limit > 0);
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   m.fill.style.width = `${pct}%`;
   m.box.classList.toggle("hot", pct >= 80);
@@ -307,6 +313,7 @@ function taskCard(runId, task, turnNode) {
     timeBudget: 0,
     tokenBudget: 0,
     spent: 0,
+    tokenSource: null,
     timer: 0,
     count: 0,
     phase: "starting",
@@ -373,6 +380,9 @@ function tick(card) {
   const live = card.state === "running" ? (Date.now() - card.elapsedAt) / 1000 : 0;
   const elapsed = card.elapsed + live;
   const budget = card.timeBudget;
+  // "~" marks a count that is partly estimated: a live run's in-flight reply, or an
+  // outcome sealed with estimated tokens. A count the server measured has none.
+  const approx = card.tokenSource === "usage" ? "" : "~";
   setMeter(
     card.time,
     elapsed,
@@ -384,8 +394,8 @@ function tick(card) {
     card.spent,
     card.tokenBudget,
     card.tokenBudget
-      ? `~${fmtTokens(card.spent)} of ${fmtTokens(card.tokenBudget)}`
-      : `~${fmtTokens(card.spent)} tokens`,
+      ? `${approx}${fmtTokens(card.spent)} of ${fmtTokens(card.tokenBudget)}`
+      : `${approx}${fmtTokens(card.spent)} tokens`,
   );
 }
 
@@ -834,6 +844,7 @@ function renderPacket(card, packet) {
   if (packet.task) verdict.appendChild(el("p", "verdict-task", packet.task));
   verdict.appendChild(el("p", "verdict-text", packet.verdict_text));
   paintTests(card, packet.test_edits);
+  card.tokenSource = packet.token_source || null;
   paintSpend(card, packet.spend);
   if (packet.offer_test_edits) verdict.appendChild(testEditOffer(card, packet));
   if (packet.header.length) {
