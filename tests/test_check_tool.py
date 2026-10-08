@@ -537,16 +537,35 @@ def test_a_whole_suite_check_on_an_auditor_without_it_is_blocked_never_narrowed(
     assert [t for t, _ in fake.calls if t == 1] == [1]  # only the finish audit's
 
 
-@pytest.mark.parametrize("value", ["true", 1, None])
+@pytest.mark.parametrize("value", ["yes", 1, None])
 def test_a_whole_suite_that_is_not_a_boolean_runs_nothing(repo: Path, value: object) -> None:
     from saddle.engine import CHECK_WHOLE_SUITE_NOT_BOOL
 
     fake = WholeSuiteAuditor()
     client = Scripted([[edit("e", "a - b", "a + b")], [call(CHECK_TOOL, "b", whole_suite=value)]])
     result, _ = run(repo, client, auditor=fake)
-    assert results(result, CHECK_TOOL) == [CHECK_WHOLE_SUITE_NOT_BOOL]
+    # the refusal names what it got, so the model can see what to change
+    assert results(result, CHECK_TOOL) == [f"{CHECK_WHOLE_SUITE_NOT_BOOL}, not {json.dumps(value)}"]
     assert fake.whole == []
     assert check_spans(result) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "whole"),
+    [("True", True), ("true", True), (" TRUE ", True), ("false", False), ("False", False)],
+)
+def test_whole_suite_written_as_a_string_is_the_boolean_it_names(
+    repo: Path, value: str, whole: bool
+) -> None:
+    """#132a r1 wrote `{"whole_suite":"True"}` (Strata has no constrained decoding).
+    Refused, its next call was `{}`: a narrowed check in place of the whole suite it
+    asked for, which is what the refusal exists to prevent."""
+    fake = WholeSuiteAuditor()
+    client = Scripted([[edit("e", "a - b", "a + b")], [call(CHECK_TOOL, "b", whole_suite=value)]])
+    result, _ = run(repo, client, auditor=fake)
+    assert len(fake.whole) == (1 if whole else 0)
+    (span,) = check_spans(result)
+    assert (span.argv[-1] == "whole-suite") is whole
 
 
 @pytest.mark.parametrize("arguments", ["{not json", "[]", '"whole_suite"'])

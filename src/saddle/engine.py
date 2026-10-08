@@ -19,7 +19,7 @@ import queue
 import re
 import threading
 import uuid
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -1951,12 +1951,26 @@ def _hold_guarded(auto: AutoRun) -> None:
 
 
 CHECK_WHOLE_SUITE_NOT_BOOL: Final = "error: check's whole_suite must be true or false"
-"""A `whole_suite` that is not a JSON boolean runs nothing: read as false, a
-narrowed check would answer a question the model asked about the whole suite."""
+"""A `whole_suite` that is not a boolean runs nothing: read as false, a narrowed
+check would answer a question the model asked about the whole suite. The refusal
+names the value it got (`_flag`)."""
 
 CHECK_MUTATION_NOT_BOOL: Final = "error: check's mutation must be true or false"
-"""A `mutation` that is not a JSON boolean runs nothing: read as false, a check
-without mutation would answer a question the model asked about it (#180)."""
+"""A `mutation` that is not a boolean runs nothing: read as false, a check without
+mutation would answer a question the model asked about it (#180)."""
+
+
+def _flag(args: Mapping[str, Any], key: str) -> bool | None:
+    """`key` in a check's arguments as a boolean, False when absent; None when it is
+    not one. The strings "true" and "false", in any case, are the booleans they
+    name. A model on a server with no constrained decoding wrote `"True"` (#132a
+    r1), was refused, and checked a narrowed suite instead of the whole one."""
+    value = args.get(key, False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return None
 
 
 CHECK_ARGUMENTS_NOT_OBJECT: Final = (
@@ -1975,12 +1989,12 @@ def _check(feed: AuditHooks, arguments: str) -> str:
         return CHECK_ARGUMENTS_NOT_OBJECT
     if not isinstance(args, dict):
         return CHECK_ARGUMENTS_NOT_OBJECT
-    whole = args.get("whole_suite", False)
-    if not isinstance(whole, bool):
-        return CHECK_WHOLE_SUITE_NOT_BOOL
-    mutation = args.get("mutation", False)
-    if not isinstance(mutation, bool):
-        return CHECK_MUTATION_NOT_BOOL
+    whole = _flag(args, "whole_suite")
+    if whole is None:
+        return f"{CHECK_WHOLE_SUITE_NOT_BOOL}, not {json.dumps(args['whole_suite'])}"
+    mutation = _flag(args, "mutation")
+    if mutation is None:
+        return f"{CHECK_MUTATION_NOT_BOOL}, not {json.dumps(args['mutation'])}"
     return feed.check(whole_suite=whole, mutation=mutation)
 
 

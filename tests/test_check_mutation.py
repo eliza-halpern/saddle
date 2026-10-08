@@ -81,13 +81,25 @@ def test_a_whole_suite_mutation_check_runs_both(repo: Path) -> None:
     assert span.argv[-2:] == ["whole-suite", CHECK_MUTATION]
 
 
-@pytest.mark.parametrize("value", ["true", 1, None])
+@pytest.mark.parametrize("value", ["yes", 1, None])
 def test_a_mutation_that_is_not_a_boolean_runs_nothing(repo: Path, value: object) -> None:
     client = Scripted([[edit("e", "a - b", "a + b")], [call(CHECK_TOOL, "b", mutation=value)]])
     result, fake = run(repo, client)
-    assert results(result, CHECK_TOOL) == [CHECK_MUTATION_NOT_BOOL]
+    assert results(result, CHECK_TOOL) == [f"{CHECK_MUTATION_NOT_BOOL}, not {json.dumps(value)}"]
     assert fake.tiers() == [0, 1, 2]  # the finish audit's alone
     assert check_spans(result) == []
+
+
+@pytest.mark.parametrize(("value", "tier2"), [("True", True), ("false", False)])
+def test_mutation_written_as_a_string_is_the_boolean_it_names(
+    repo: Path, value: str, tier2: bool
+) -> None:
+    client = Scripted([[edit("e", "a - b", "a + b")], [call(CHECK_TOOL, "m", mutation=value)]])
+    result, fake = run(repo, client)
+    (span,) = check_spans(result)
+    assert (span.argv[-1] == CHECK_MUTATION) is tier2
+    # the check's tiers come first, then the finish audit's 0, 1, 2
+    assert fake.tiers()[:3] == ([0, 1, 2] if tier2 else [0, 1, 0])
 
 
 # -- the real auditor: a mutation check and the finish audit name the same mutants --
