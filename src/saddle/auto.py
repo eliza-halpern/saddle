@@ -87,6 +87,7 @@ from saddle.jsevidence import (
 )
 from saddle.recall import Recall
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
+from saddle.snapshots import SNAPSHOT_DIR, Snapshots
 from saddle.summary_names import absent as absent_code_names
 from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
@@ -631,6 +632,14 @@ class AutoOptions:
     168,034-token reply on the first round, which it refuses outright."""
     run_id: str = ""
     clock: Callable[[], float] = monotonic
+    snapshot_marks_s: tuple[int, ...] = ()
+    """`--snapshot-marks 1800,3600,5400,7200`: the elapsed seconds at which a copy of
+    the run's worktree is kept beside its ledger, in the plain agent's snapshot layout
+    (`snapshots.Snapshots`). Each time the run is about to ask the model, and once when
+    it ends, it copies its tree for every mark it has reached and has not copied yet;
+    elapsed time is `clock`, from the start of the run. A mark the run does not live to
+    is not taken. Empty (the default) takes no snapshots at all: no `snapshots` folder
+    beside the ledger and no `snapshot` span in it."""
     arm: Arm = "E+A+F"
     """E+A+F (default): audits at checkpoints and at finish, delivered as
     tool results, and a failing finish audit refuses `finish`. E+A
@@ -1062,6 +1071,20 @@ def run_auto(
         started_at=utc_now().isoformat(),
     )
     append_span(journal, start)
+    # `--snapshot-marks`: the copies sit beside the ledger, outside the worktree, where
+    # the run's tools cannot reach them, as the ledger itself does.
+    snapshots = (
+        Snapshots(
+            marks=options.snapshot_marks_s,
+            worktree=worktree,
+            folder=journal.parent / SNAPSHOT_DIR,
+            journal=journal,
+            run_span=start.span_id,
+            node_id="chat#1",
+        )
+        if options.snapshot_marks_s
+        else None
+    )
     p1, extraction = _requirements(options, client, worktree, base, journal, start.span_id)
     feed = (
         None
@@ -1093,6 +1116,7 @@ def run_auto(
         ),
         run_span=start.span_id,
         changed_files=lambda: changed_files(worktree),
+        snapshot=snapshots,
         prompt_check=(
             (
                 lambda: prompt_constants.check(

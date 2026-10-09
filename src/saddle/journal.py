@@ -638,6 +638,15 @@ COMPACTION_SPAN: Final = "compaction"
 Not `auto:`-prefixed, since `transcript.session_line` and the packet read
 those as the run's start, spend and outcome; not a tool span, so the chain
 does not hold it to the outcome's tool list."""
+SNAPSHOT_SPAN: Final = "snapshot"
+"""The span an autonomous run seals for each timed copy of its worktree it keeps
+(`snapshots.Snapshots.snapshot_due`, `saddle auto --snapshot-marks`): argv is
+`[name, m<mark>, content_sha256]`, detail names the mark and that hash, so the hash of
+a tree the run no longer holds sits in the sealed chain. Not `auto:`-prefixed, as
+`compaction` is not: a reader of the ledger's outcomes must not mistake a copy for a
+run's start, spend or outcome. Not a tool span either: the run copies its own tree, the
+model never asks for it, and a copy taken as the run ends would fail the chain's rule
+that no tool span follows the outcome."""
 AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped", "auto:unchanged")
 """A run's outcome span names (`engine._seal_outcome`); `auto:unchanged` is
 the third ending (finish on a tree equal to the baseline). Not `auto:spend`,
