@@ -453,6 +453,41 @@ recorded as refusing; the exit code is the audit's. It refuses with exit 2, writ
 nothing, when the ledger does not verify, records no covered commit, `REV` is not on top
 of the covered commit, there are no commits after it, or `--baseline` is given.
 
+## saddle sql-check --dialect D --schema S PATH...
+
+Resolves every table and column that the queries in each `.sql` file name against a
+schema snapshot. It needs no database and no model, but it does need the `sql` extra
+(`pip install 'saddle[sql]'`: sqlglot and sqlfluff). Without the extra it says so and
+exits 2.
+
+| Flag | Meaning |
+|---|---|
+| `--dialect D` | the SQL dialect to parse with, as sqlglot names it (`duckdb`, `postgres`, `mysql`, `sqlite`, ...); an unknown one exits 2 on stderr |
+| `--schema S` | a JSON object mapping each table name to the list of its column names, for example `{"users": ["id", "name"], "orders": ["id"]}` |
+
+Each miss prints one line: `PATH:LINE:COL: unknown table NAME` or
+`PATH:LINE:COL: unknown column NAME`.
+
+- PATH is the path as given.
+- LINE and COL are 1-based, counted in the whole file, and point to where the name itself
+  starts (after a qualifier).
+- NAME is the bare name as written.
+
+Only the files with a miss are named. The command exits 0 when everything resolves. It
+exits 1 when anything does not, and also when a file does not parse, cannot be read or is
+not text, or when the snapshot is not one.
+
+Names resolve as SQL reads them, and case-insensitively:
+
+- A column reads the sources its own query's FROM names, and the queries around it.
+- A CTE lends its columns only to a query that joins it.
+- A query's ORDER BY, GROUP BY, HAVING, QUALIFY and WHERE may read its own output names.
+- Statements that hold no query (`CREATE`, `DROP`, `ALTER`, `PRAGMA`) are not resolved.
+
+Where dialects differ, the check follows sqlite3, and a test holds it to sqlite3 on every
+query that test lists. So an output name in a WHERE is taken, though Postgres and MySQL
+refuse it.
+
 ## Legacy: saddle run and saddle dag
 
 `saddle run` and `saddle dag` are the Phase 1 multi-node pipeline, kept and labelled
