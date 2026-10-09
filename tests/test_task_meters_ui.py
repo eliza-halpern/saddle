@@ -17,6 +17,7 @@ count keeps "~"; a meter with a limit keeps its track and its "of".
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,13 +26,18 @@ from browser_guard import BROWSER
 from chrome_page import drive_page, served_chat
 from packet_seed import make_repo, seed
 
+from saddle.packet import Packet, compile_packet
+
 needs_chrome = pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
 
 BODY = """
 await page.chat(args.sid);
+// A new card paints its meters "0s" at once and keeps them hidden; the packet's numbers
+// arrive in paintSpend, which unhides them. Shown, not merely filled, is the packet's.
 await page.until(() => {
   const values = [...document.querySelectorAll(".task-card .tmeter-value")];
-  return values.length === 2 && values.every((v) => v.textContent !== "—");
+  const shown = (v) => v.textContent !== "—" && !v.closest("[hidden]");
+  return values.length === 2 && values.every(shown);
 });
 return await page.js(() => {
   const read = () => {
@@ -77,3 +83,22 @@ def test_no_limit_draws_no_track_and_an_unsealed_count_keeps_its_tilde(tmp_path:
     unbudgeted = _meters(tmp_path)["unbudgeted"]
     assert unbudgeted["time"] == {"value": "42s", "track": False}, unbudgeted
     assert unbudgeted["tokens"] == {"value": "~1.2k tokens", "track": False}, unbudgeted
+
+
+@needs_chrome
+def test_the_meters_are_read_once_the_packet_is_painted_however_slow_it_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both tests above flaked on 2026-10-08, in a run's audit and in a full gate. Each read
+    `0s` and `~0 tokens`, the numbers a card holds from the moment it is made. The packet's
+    numbers reach a card in `paintSpend`, which also unhides its meters; until then its
+    meters read `0s`, hidden. A slow packet route makes that window wide every time."""
+
+    def slow(*args: Any, **kwargs: Any) -> Packet:
+        time.sleep(1.5)
+        return compile_packet(*args, **kwargs)
+
+    monkeypatch.setattr("saddle.web.app.compile_packet", slow)  # the name the route calls
+    meters = _meters(tmp_path)
+    assert meters["sealed"]["time"] == {"value": "42s of 10m 00s", "track": True}, meters
+    assert meters["unbudgeted"]["time"] == {"value": "42s", "track": False}, meters
