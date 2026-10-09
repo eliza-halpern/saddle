@@ -22,20 +22,35 @@ The pieces the contract leaves open, and what this module chose for each:
   it, because SQL reads a bare name that way. A miss reports the name as the file wrote
   it, with its qualifier and its quotes taken off, and the file's own text is what the
   report names rather than a resolved spelling of it.
-- A name a query registered is the source its columns name. A CTE wins its name over a
-  snapshot table of the same name for as long as its statement lasts, and within a
-  statement a name always selects a CTE, a derived table or a resolved table rather than a
-  snapshot table. A CTE's body sees the CTEs declared before itself and not itself; a
-  derived table's body sees the query around it, as a correlated subquery does, but not
-  its own name. A recursive `WITH` is the one SQL lets a source name its own body, and
-  what its body may read through that name is the column list the CTE writes over itself:
-  a recursive arm's `walk.id` of `walk(id)` resolves and its `walk.user_id` does not. A
-  `VALUES` table named with a column list — `FROM (VALUES (1, 2), (3, 4)) AS totals(id,
-  amount)` — states the names it holds and names no table, so it is that list alone, as a
-  derived table's own column list is, and a source named without one states nothing an
-  unqualified column of that query may read. A `db` written before a table selects only
-  the table's last name; neither the schema a table was written under nor a catalog is
-  looked at.
+- A query's columns read the sources its own FROM and JOINs name, and the sources of the
+  queries around it, as SQL reads them; where SQL is unsure, sqlite3 decides
+  (`test_sql_check_agrees_with_sqlite3_on_what_resolves`):
+  - A CTE wins its name over a snapshot table of the same name for as long as its
+    statement lasts. A CTE lends its columns only to a query that names it in its FROM: a
+    query that never joins it reads nothing from it.
+  - A CTE's body sees the CTEs named beside it in its WITH (sqlite3 runs a CTE that reads
+    one named after it), but not itself. It never sees the FROM of the query that holds the
+    WITH.
+  - A derived table's body sees its query's CTEs and the queries around that query, but
+    not the sources beside it in the FROM. A `LATERAL` one is the one that reads them.
+  - A subquery in a WHERE, a SELECT list or a HAVING is correlated, and reads the FROM of
+    the query it sits in. An `INSERT`'s query does not read the table it fills.
+  - A table read under an alias is read by that alias alone. An unnamed derived table
+    (`FROM (SELECT id FROM users)`) lends its columns to an unqualified name.
+  - A recursive `WITH` is the one SQL lets a source name its own body, and what its body
+    may read through that name is the column list the CTE writes over itself: a recursive
+    arm's `walk.id` of `walk(id)` resolves and its `walk.user_id` does not.
+  - A `VALUES` table named with a column list — `FROM (VALUES (1, 2), (3, 4)) AS
+    totals(id, amount)` — states the names it holds and names no table, so it is that list
+    alone, as a derived table's own column list is, and a source named without one states
+    nothing an unqualified column of that query may read.
+  - A `db` written before a table selects only the table's last name; neither the schema a
+    table was written under nor a catalog is looked at.
+- A query's own output names — `SELECT total * 2 AS doubled` names `doubled` — are read,
+  unqualified, by its WHERE, GROUP BY, HAVING, QUALIFY and ORDER BY, as sqlite3 and DuckDB
+  read them (`OUTPUT_READERS`). Postgres and MySQL refuse an output name in a WHERE, and
+  this check lets one through there rather than refuse what sqlite3 runs. A window's
+  `OVER (ORDER BY ...)` is no clause of the query and reads no output name.
 - A statement that holds no query — a `CREATE`, a `DROP`, a `PRAGMA`, `ALTER`, a bare
   command — is not resolved at all, and neither is a name that appears only in a comment.
   A derived table whose own query missed a name says nothing about what its columns are,
@@ -65,7 +80,9 @@ column list, a `FROM` that reads a file, a `SELECT` column renamed by its
 alias, correlated subqueries qualified by a table of the query around them, an `INSERT` of
 a column list of values and of a `SELECT`, a column list naming a CTE, `UPDATE` (aliased,
 and one taking its columns from another table), `DELETE`, UNIONs, a bare `*` and a qualified
-`u.*`, output names a `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY` or `LIMIT` reads, quoted
+`u.*`, output names a `WHERE`, `GROUP BY`, `HAVING` or `ORDER BY` reads (a UNION's `ORDER BY`
+too), a `LATERAL` derived table reading the FROM before it, an unnamed derived table, a
+qualifier written in another case than its alias, quoted
 names (also a quoted spelled name, backticks, and a quoted alias), a name written in another
 case than the snapshot's, a table that is a name chain, a `FROM` that names no table, a
 comment naming names no query reads, statements that hold no query, a table the snapshot
@@ -78,8 +95,11 @@ column not among a CTE's or a derived table's output names, a miss inside a CTE 
 derived table body, a column not among a named `VALUES` source's own list and a column
 named under a `FROM` that names no table, a recursive CTE column its own list does not name
 and a CTE name its own body may not read, misspellings on a UNION side, a column of a name
-that is no table, a subquery that lends nothing to the query around it, text that tokenizes
-wrong and text that
+that is no table, a subquery that lends nothing to the query around it, a column a CTE's
+body reads from the query that holds its WITH, a column a derived table reads from a source
+beside it, a column of a CTE the query never joins, a table's own name read past its alias,
+an `INSERT`'s query reading the table it fills, a misspelt output name and an output name
+read by a window's `ORDER BY`, text that tokenizes wrong and text that
 does not parse, a file that is not there and one that is not text, a snapshot that is not
 JSON, that is not an object, or whose value is not a list of names, and a dialect sqlglot
 does not know.
@@ -148,6 +168,22 @@ S. Leave `sql-check` out of the commands `main` handles: killed by
 T. Treat a missing sqlglot as a pass: killed by
    `test_the_sql_check_command_names_sqlglot_when_it_is_missing`.
 
+The review of the run that wrote the above found the scopes too wide and the output names
+unread, and these mutants, applied the same way, hold the fix:
+
+U. Let a CTE's body read the FROM of the query that holds its WITH: killed by
+   `test_a_cte_body_does_not_read_the_from_of_the_query_that_holds_it` and by
+   `test_sql_check_agrees_with_sqlite3_on_what_resolves`.
+V. Lend every CTE's columns to the query below the WITH, joined or not: killed by
+   `test_a_query_reads_a_cte_only_through_its_from`.
+W. Let a derived table's body read the sources beside it: killed by
+   `test_a_derived_table_does_not_read_the_sources_beside_it`.
+X. Read no output name: killed by
+   `test_a_select_alias_is_read_by_the_clauses_that_read_output_names`.
+Y. Read output names under any clause, at any depth: killed by that test's known-bad
+   `OVER (ORDER BY a)`.
+Z. Read a qualifier case-sensitively: killed by `test_a_qualifier_resolves_in_any_case`.
+
 Two further readings the tests hold, each of which the code guards with a branch no single
 mutant names: a file that does not parse is never a pass
 (`test_a_file_that_does_not_parse_never_exits_0`, over a parse failure and a tokenize
@@ -185,19 +221,45 @@ STAR: Final = "*"
 #: What a snapshot must be, spelled once so the refusal says what a snapshot is.
 NOT_A_SNAPSHOT: Final = "it is not an object mapping each table name to its column names"
 
+#: The clauses of a query that may read its own output names: `ORDER BY doubled` of a
+#: `SELECT total * 2 AS doubled`. sqlite3 and DuckDB read an output name in each of these;
+#: Postgres and MySQL refuse one in a `WHERE` (and Postgres in a `HAVING`), which this check
+#: lets through rather than refuse a file sqlite3 runs. Only the query's own clauses read
+#: them: a window's `OVER (ORDER BY ...)` is no clause of the query.
+OUTPUT_READERS: Final = frozenset({"where", "group", "having", "qualify", "order"})
+
 #: The columns one query's scope holds, under the name each source is read by here, and
 #: what each of them outputs: tables resolved here, CTEs and derived tables named here, and
 #: whatever the queries around this one left visible to it.
 Context = dict[str, list[str]]
 
+#: A column one query wrote: its qualifier (empty when it has none), its name, the node that
+#: spells the name, and whether a clause that reads the query's output names holds it.
+Name = tuple[str, str, exp.Expression, bool]
+
 #: A query that can name sources of its own. A CTE's body is one, so it is resolved as its
 #: own query rather than as the node that names it.
 Query = exp.Query | exp.Subquery | exp.CTE
 
-#: A source a query names in its FROM: a CTE, a derived table, or a VALUES table written with
-#: a column list of its own (`FROM (VALUES (1), (2)) AS t(id)`). A CTE resolves as its own
-#: query, through its body; the other two are resolved as they are written.
-Source = exp.CTE | exp.Subquery | exp.Values
+#: A source a query names: a CTE, a derived table in a FROM, a `LATERAL` derived table, or a
+#: VALUES table written with a column list of its own (`FROM (VALUES (1), (2)) AS t(id)`). A
+#: CTE resolves as its own query, through its body, and so does a `LATERAL` one; the other
+#: two are resolved as they are written.
+Source = exp.CTE | exp.Subquery | exp.Values | exp.Lateral
+
+
+@dataclass(frozen=True)
+class Level:
+    """What one query lends the queries resolved inside it."""
+
+    columns: Context
+    """The sources its FROM, its JOINs and its target table name, under the name each is read
+    by: what a correlated subquery of it may read. Empty where SQL keeps them apart: the body
+    of a CTE or of a derived table does not see the FROM it sits beside (a `LATERAL` one
+    does), and an `INSERT`'s query does not see the table it fills."""
+    ctes: Context
+    """The CTEs its WITH names: what a query inside it may name as a table."""
+
 
 #: A statement or query the check resolves. sqlglot keeps its abstract `Query` apart from
 #: `Expression`, so the two together name every node a file's text can hand to `_query`: a
@@ -258,34 +320,43 @@ def _written(spelled: exp.Expression, text: str) -> tuple[int, int]:
 
 def _names_of(
     node: Statement,
-    columns: list[tuple[str, str, exp.Expression]],
+    columns: list[Name],
     tables: list[exp.Table],
     output: list[exp.CTE],
     contexts: list[Source],
     nested: list[Statement],
+    reads_outputs: bool = False,
+    top: bool = True,
 ) -> None:
     """The names one query writes, at its own level.
 
-    The tables and columns of its direct scope, the `SELECT` or set operation that is a
-    nested query of it (the source of an `INSERT ... SELECT`, a side of a `UNION` that is
-    not a statement of its own, the query in a scalar subquery), and the CTEs and derived
-    tables that name a source here. The names under one of those belong to that query, which
-    resolves them itself; only the tables and columns of this level are collected here. A
-    `Schema`'s list — `INSERT INTO users (id, name)` — writes a column as a bare name rather
-    than as a column node, so it is collected there as a name no source qualifies. A star
-    column (`u.*`, `*`) writes no name that can miss, and is not collected. A `TABLE('x')`
-    is no table node at all, so nothing here is collected for it either. Each column comes
-    with the name the query wrote it as, so a miss reports the name where it was written.
+    The tables and columns of its direct scope, the queries nested in it that resolve against
+    it (the source of an `INSERT ... SELECT`, a side of a `UNION` that is not a statement of
+    its own, a scalar subquery, the query of an `IN` or an `EXISTS`), its CTEs, and the
+    sources its FROM and JOINs name that are no table: a derived table, a `LATERAL` one, and
+    a VALUES table with a column list. A subquery is one or the other by where it sits: in a
+    FROM or a JOIN it is a source, anywhere else it is a nested query. The names under one of
+    those belong to that query, which resolves them itself; only the tables and columns of
+    this level are collected here. A `Schema`'s list — `INSERT INTO users (id, name)` —
+    writes a column as a bare name rather than as a column node, so it is collected there as
+    a name no source qualifies. A star column (`u.*`, `*`) writes no name that can miss, and
+    is not collected. A `TABLE('x')` is no table node at all, so nothing here is collected
+    for it either. Each column comes with the name the query wrote it as, so a miss reports
+    the name where it was written, and with whether one of the query's own clauses that read
+    its output names (`OUTPUT_READERS`) holds it.
     """
     for child in node.iter_expressions():
+        reads = reads_outputs or (top and child.arg_key in OUTPUT_READERS)
         if isinstance(child, exp.Column):
             if child.name != STAR and isinstance(child.this, exp.Identifier):
-                columns.append((child.table, child.name, child.this))
+                columns.append((child.table, child.name, child.this, reads))
         elif isinstance(child, exp.Table):
             tables.append(child)
         elif isinstance(child, exp.CTE):
             output.append(child)
-        elif isinstance(child, exp.Subquery):
+        elif isinstance(child, exp.Lateral):
+            contexts.append(child)
+        elif isinstance(child, exp.Subquery) and isinstance(child.parent, (exp.From, exp.Join)):
             contexts.append(child)
         elif isinstance(child, exp.Values) and child.args.get("alias") is not None:
             # A VALUES table named with a column list is registered as a source of its own,
@@ -295,13 +366,13 @@ def _names_of(
             nested.append(child)
         elif isinstance(child, exp.Schema):
             columns.extend(
-                ("", name.name, name)
+                ("", name.name, name, False)
                 for name in child.expressions
                 if isinstance(name, exp.Identifier)
             )
-            _names_of(child, columns, tables, output, contexts, nested)
+            _names_of(child, columns, tables, output, contexts, nested, reads, top=False)
         else:
-            _names_of(child, columns, tables, output, contexts, nested)
+            _names_of(child, columns, tables, output, contexts, nested, reads, top=False)
 
 
 def _source(qualifier: str, enclosing_scope: Sequence[Context]) -> list[str] | None:
@@ -344,11 +415,28 @@ def _declared_names(source: Source) -> list[str]:
 
 
 def _named_selects(source: Source) -> list[str]:
-    """The names a source's own query writes out, or nothing when its body is no query."""
-    body = source.this if isinstance(source, exp.CTE) else source
+    """The names a source's own query writes out, or nothing when its body is no query. A CTE
+    and a `LATERAL` hold their query one node down; a derived table is its query."""
+    body = source.this if isinstance(source, (exp.CTE, exp.Lateral)) else source
     if isinstance(body, (exp.Query, exp.Subquery)):
         return list(body.named_selects)
     return []
+
+
+def _held(source: Source) -> list[str]:
+    """What a source holds, as its columns are read: a star writes no name and holds every
+    name read from that source, and a column renamed by its alias is held under its new
+    name, so reading the old name from it is a miss."""
+    outputs = _output_names(source)
+    return [STAR] if STAR in outputs else [written.lower() for written in outputs]
+
+
+def _named_cte(name: str, ctes: Context, enclosing: Sequence[Level]) -> list[str] | None:
+    """The CTE a table name names, nearest WITH first, or None when no WITH names it."""
+    for registry in (ctes, *(level.ctes for level in enclosing)):
+        if name in registry:
+            return registry[name]
+    return None
 
 
 def _recursive(statement: Statement) -> list[str]:
@@ -367,51 +455,63 @@ def _recursive(statement: Statement) -> list[str]:
 def _query(
     statement: Statement,
     schema: dict[str, list[str]],
-    enclosing: Sequence[Context],
+    enclosing: Sequence[Level],
     misses: list[tuple[str, str, exp.Expression]],
 ) -> None:
     """Resolve one query, and every query nested in it, against the snapshot.
 
     `misses` gathers what does not resolve, as (`table` or `column`, the name as it is
     reported, the name as the query wrote it), so each miss carries its own position.
+    `enclosing` is what the queries around this one lend it, nearest first (`Level`).
 
-    Sources named here register before any name of this query resolves, so a CTE wins its
-    name over a snapshot table of the same name. A body registered here resolves only after
-    this query's tables, which is what lets a correlated subquery read the tables of the
-    query it sits in while its own tables stay out of that scope, and it resolves with its
-    own name held back from itself — except in a recursive `WITH`, where SQL lets a source read
-    its own name — so a CTE cannot read its own output names and a derived table's `SELECT bogus`
-    is a column of that body's own FROM rather than an output name it lends to itself, while a
-    source named beside it is one its body can read; a body that resolved before this query's
-    tables would report its miss as a miss of this query instead. Tables resolve before columns,
-    so the source a qualified column names is registered by the time the column reads it. A set
-    operation needs no branch of its own: its sides and its `WITH` are children of it, so a
-    side resolves as a nested query against the CTEs registered here.
+    A query reads two things, kept apart as SQL keeps them. Its WITH names CTEs, which a
+    table name of this query or of any query inside it may name, and which win their name
+    over a snapshot table of the same name. Its FROM and JOINs name sources, and those alone
+    are what its columns read, so a CTE it never joins lends its columns nothing.
+
+    What each body sees, nearest first:
+
+    - A CTE's body sees the CTEs named beside it in its WITH, but not its own name: sqlite3
+      lets one read a CTE named after it. In a recursive WITH it sees its own name too,
+      holding the column list the CTE writes over itself. It also sees the queries around
+      the query that holds the WITH. It never sees that query's FROM, which is not read yet
+      when its CTEs are.
+    - A derived table's body sees the same: its query's CTEs and the queries around it, but
+      not the sources beside it in the FROM. sqlite3 refuses a column only a table beside it
+      holds. A `LATERAL` body is the one that reads the FROM beside it.
+    - A nested query is correlated: an `IN`, an `EXISTS`, a scalar subquery, a set
+      operation's side. It reads the FROM of the query it sits in. An `INSERT`'s query is
+      the exception: it does not see the table it fills.
+
+    A table read under an alias is read by that alias alone (`users.id` of
+    `FROM users AS u` is no column, and sqlite3 says so). An unnamed derived table
+    (`FROM (SELECT id FROM users)`) still lends its columns to an unqualified name; no
+    qualifier can name it. A query's own output names are read, unqualified, by its
+    `OUTPUT_READERS` clauses. A set operation needs no branch of its own: its sides and its
+    `WITH` are children of it, so a side resolves as a nested query against its CTEs, and
+    its `ORDER BY` reads the output names of its first side.
     """
-    columns: list[tuple[str, str, exp.Expression]] = []
+    columns: list[Name] = []
     tables: list[exp.Table] = []
     output: list[exp.CTE] = []
     contexts: list[Source] = []
     nested: list[Statement] = []
     _names_of(statement, columns, tables, output, contexts, nested)
-    registered: list[Source] = [*output, *contexts]
+
+    ctes: Context = {cte.alias_or_name.lower(): _held(cte) for cte in output}
+    ctes.pop("", None)
+    recursive = _recursive(statement)
+    for cte in output:
+        own = cte.alias_or_name.lower()
+        beside = {name: held for name, held in ctes.items() if name != own or own in recursive}
+        _query(cte.this, schema, (Level({}, beside), *enclosing), misses)
 
     sources: Context = {}
     unstated: list[str] = []
-    for named in registered:
-        alias = named.alias_or_name.lower()
-        if not alias:
-            continue
-        # A source's output names are what its own query says it holds: a star writes no name
-        # and holds every name read from that source, and a column renamed by its alias is
-        # held under its new name, so reading the old name from it is a miss.
-        outputs = _output_names(named)
-        sources[alias] = [STAR] if STAR in outputs else [written.lower() for written in outputs]
-
     for table in tables:
         # A table's own name is what the snapshot holds: a `db.` or a catalog written before
-        # it is not part of the snapshot, and the alias is what the query's columns are named
-        # under, so a resolved table holds them under both names.
+        # it is not part of the snapshot. Its columns are read under the name the query
+        # gives it: its alias when it has one, its own name otherwise.
         name, alias = table.name.lower(), table.alias_or_name.lower()
         spelled = table.this
         if not isinstance(spelled, exp.Identifier):
@@ -422,47 +522,44 @@ def _query(
             # against the sources that state their columns.
             unstated.append(alias)
             continue
-        columns_of = _source(name, (sources, *enclosing))
+        columns_of = _named_cte(name, ctes, enclosing)
         if columns_of is None:
             columns_of = schema.get(name)
         if columns_of is None:
             misses.append(("table", table.name, spelled))
             continue
-        sources[name] = columns_of if alias == name else _union(columns_of, sources.get(name, []))
-        if alias != name:
-            sources[alias] = _union(columns_of, sources.get(alias, []))
+        sources[alias] = _union(columns_of, sources.get(alias, []))
+    for index, source in enumerate(contexts):
+        sources[source.alias_or_name.lower() or f"\0{index}"] = _held(source)
+    for source in contexts:
+        own = source.alias_or_name.lower()
+        beside = (
+            {name: held for name, held in sources.items() if name != own}
+            if isinstance(source, exp.Lateral)
+            else {}
+        )
+        body: Statement = source.this if isinstance(source, (exp.CTE, exp.Lateral)) else source
+        _query(body, schema, (Level(beside, ctes), *enclosing), misses)
 
-    scope = (sources, *enclosing)
-    recursive = _recursive(statement)
-    for named in registered:
-        # A source's own name is out of reach while its own body resolves, so a name qualified
-        # by it is a name the body must read from elsewhere: a `SELECT s.bogus` inside
-        # `AS s (...)` is not a column `s` is in the middle of writing. Each name is put back
-        # as soon as that body has resolved, which is what lets a CTE read a CTE named beside
-        # it in the same `WITH`, and a recursive `WITH` names its source for its own body, as
-        # SQL does.
-        own = named.alias_or_name.lower()
-        own_names: list[str] | None = sources.pop(own, None) if own else None
-        if own_names is not None and own in recursive:
-            sources[own] = own_names
-        body: Statement = named.this if isinstance(named, exp.CTE) else named
-        _query(body, schema, scope, misses)
-        if own_names is not None:
-            sources[own] = own_names
-
+    scope = (sources, *(level.columns for level in enclosing))
     every = list(
         dict.fromkeys(
             column for context in scope for columns in context.values() for column in columns
         )
     )
-    for qualifier, name, written in columns:
+    outputs = (
+        [written.lower() for written in statement.named_selects if written != STAR]
+        if isinstance(statement, exp.Query)
+        else []
+    )
+    for qualifier, name, written, reads in columns:
         # A qualified column resolves only against the source its qualifier names, so a
         # qualifier naming nothing the query can read resolves nothing, whatever its other
-        # tables hold. An unqualified column resolves against every source of its query. A
-        # source that states no columns — the alias of a `FROM` that reads a table function
-        # rather than naming a table — holds what is qualified by it, so a column named under
-        # it is not a miss; a name in such a chain is a qualifier of this kind even though no
-        # table the snapshot might hold is named by it.
+        # tables hold. An unqualified column resolves against every source of its query, and
+        # of the queries around it. A source that states no columns — the alias of a `FROM`
+        # that reads a table function rather than naming a table — holds what is qualified by
+        # it, so a column named under it is not a miss; a name in such a chain is a qualifier
+        # of this kind even though no table the snapshot might hold is named by it.
         qualified = _source(qualifier.lower(), scope) if qualifier else None
         if qualified is not None:
             held: Sequence[str] = qualified
@@ -473,10 +570,13 @@ def _query(
             held = every if not qualifier else [STAR] if qualifier.lower() in unstated else []
         if STAR in held or name.lower() in held:
             continue
+        if reads and not qualifier and name.lower() in outputs:
+            continue
         misses.append(("column", name, written))
 
+    lend = Level({} if isinstance(statement, exp.Insert) else sources, ctes)
     for query in nested:
-        _query(query, schema, scope, misses)
+        _query(query, schema, (lend, *enclosing), misses)
 
 
 def not_parsable(path: str, exc: SqlglotError, text: str) -> SqlProblem:

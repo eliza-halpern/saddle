@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import sys
 from io import StringIO
 from pathlib import Path
@@ -830,3 +831,155 @@ def test_the_sql_check_command_needs_no_model_and_no_server(tmp_path: Path) -> N
     a dialect name are the whole of what it reads, so it runs where nothing else runs."""
     good = _file(tmp_path, "good.sql", GOOD["two-statements"][1])
     assert main(["sql-check", "--dialect", "duckdb", "--schema", _snapshot(tmp_path), good]) == 0
+
+
+# -- Scopes and output names, held to sqlite3 (review of the first run, 2026-10-08) -----------
+#
+# The run's tests held every rule above, and an engine still disagreed with 6 of 8 queries:
+# output names in ORDER BY, GROUP BY and HAVING were refused, and an unqualified column read
+# sources outside its own query. Each rule below is read both ways, and the differential test
+# at the end lets sqlite3 decide what resolves.
+
+
+def test_a_select_alias_is_read_by_the_clauses_that_read_output_names() -> None:
+    """Known-bad before the fix: `ORDER BY doubled` of `SELECT ... AS doubled` read as an
+    unknown column, though every SQL engine runs it. Only the query's own clauses read an
+    output name: a window's `OVER (ORDER BY a)` does not, and sqlite3 refuses it there."""
+    _text_case("SELECT id * 2 AS doubled FROM orders ORDER BY doubled;\n", [])
+    _text_case("SELECT user_id AS who, count(*) FROM orders GROUP BY who;\n", [])
+    _text_case("SELECT user_id, count(*) AS n FROM orders GROUP BY user_id HAVING n > 1;\n", [])
+    _text_case("SELECT id AS a FROM users UNION SELECT id FROM orders ORDER BY a;\n", [])
+    _text_case("SELECT id * 2 AS doubled FROM orders ORDER BY doubeld;\n", [("column", "doubeld")])
+    _text_case("SELECT id AS a, row_number() OVER (ORDER BY a) FROM users;\n", [("column", "a")])
+
+
+def test_a_where_reads_an_output_name_as_sqlite3_and_duckdb_do() -> None:
+    """A loosening on the record: Postgres and MySQL refuse an output name in a WHERE, and
+    this check lets it through, rather than refuse a file sqlite3 and DuckDB run."""
+    _text_case("SELECT id * 2 AS doubled FROM orders WHERE doubled > 1;\n", [])
+
+
+def test_a_cte_body_does_not_read_the_from_of_the_query_that_holds_it() -> None:
+    """Known-bad before the fix: the CTE's `user_id` resolved against `orders`, a table of
+    the query below the WITH, though `users` holds no such column."""
+    _text_case(
+        "WITH t AS (SELECT user_id FROM users) "
+        "SELECT t.user_id FROM t JOIN orders ON orders.id = 1;\n",
+        [("column", "user_id")],
+    )
+    _text_case(
+        "WITH t AS (SELECT user_id FROM orders) "
+        "SELECT t.user_id FROM t JOIN users ON users.id = 1;\n",
+        [],
+    )
+
+
+def test_a_derived_table_does_not_read_the_sources_beside_it() -> None:
+    _text_case(
+        "SELECT s.user_id FROM (SELECT user_id FROM users) AS s, orders;\n",
+        [("column", "user_id")],
+    )
+    _text_case("SELECT s.user_id FROM (SELECT user_id FROM orders) AS s, users;\n", [])
+
+
+def test_a_query_reads_a_cte_only_through_its_from() -> None:
+    """Known-bad before the fix, the forgotten JOIN: a CTE the query never names in its FROM
+    lent it its columns."""
+    _text_case(
+        "WITH t AS (SELECT user_id FROM orders) SELECT name, user_id FROM users;\n",
+        [("column", "user_id")],
+    )
+    _text_case(
+        "WITH t AS (SELECT user_id FROM orders) "
+        "SELECT name, user_id FROM users JOIN t ON t.user_id = users.id;\n",
+        [],
+    )
+
+
+def test_a_lateral_source_reads_the_from_before_it() -> None:
+    """Known-bad before the fix: a `LATERAL` derived table was registered with no name, so
+    every column read through it was refused."""
+    lateral = (
+        "SELECT u.name, x.user_id FROM users AS u, "
+        "LATERAL (SELECT user_id FROM orders WHERE orders.user_id = u.{}) AS x;\n"
+    )
+    _text_case(lateral.format("id"), [], dialect="postgres")
+    _text_case(lateral.format("idd"), [("column", "idd")], dialect="postgres")
+
+
+def test_an_unnamed_derived_table_lends_its_columns() -> None:
+    _text_case("SELECT id FROM (SELECT id FROM users);\n", [])
+    _text_case("SELECT name FROM (SELECT id FROM users);\n", [("column", "name")])
+
+
+def test_a_table_read_under_an_alias_is_not_read_by_its_own_name() -> None:
+    _text_case("SELECT u.name FROM users AS u;\n", [])
+    _text_case("SELECT users.name FROM users AS u;\n", [("column", "name")])
+
+
+def test_a_qualifier_resolves_in_any_case() -> None:
+    """A survivor of the first run's review: a qualifier read case-sensitively passed every
+    test, and refused `U.name` of `FROM users AS u`."""
+    _text_case("SELECT U.name FROM users AS u;\n", [])
+    _text_case("SELECT U.nmae FROM users AS u;\n", [("column", "nmae")])
+
+
+def test_an_insert_query_does_not_read_the_table_it_fills() -> None:
+    _text_case("INSERT INTO orders (id, user_id) SELECT id, id FROM users;\n", [])
+    _text_case(
+        "INSERT INTO orders (id, user_id) SELECT id, user_id FROM users;\n",
+        [("column", "user_id")],
+    )
+
+
+#: Queries an engine judges: each must pass the check exactly when sqlite3 runs it against
+#: tables shaped like `SCHEMA`. Good and bad are not labelled here; sqlite3 decides.
+SQLITE_JUDGED: list[str] = [
+    "SELECT u.name, o.user_id FROM users AS u JOIN orders AS o ON o.user_id = u.id;",
+    "SELECT nmae FROM users ORDER BY id;",
+    "SELECT name FROM orders;",
+    "SELECT id * 2 AS doubled FROM orders ORDER BY doubled;",
+    "SELECT user_id AS who, count(*) FROM orders GROUP BY who;",
+    "SELECT user_id, count(*) AS n FROM orders GROUP BY user_id HAVING n > 1;",
+    "SELECT id AS a FROM users UNION SELECT id FROM orders ORDER BY a;",
+    "SELECT id * 2 AS doubled FROM orders WHERE doubled > 1;",
+    "SELECT id AS a, row_number() OVER (ORDER BY a) FROM users;",
+    "WITH t AS (SELECT user_id FROM users) SELECT t.user_id FROM t JOIN orders ON orders.id = 1;",
+    "SELECT s.user_id FROM (SELECT user_id FROM users) AS s, orders;",
+    "WITH t AS (SELECT user_id FROM orders) SELECT name, user_id FROM users;",
+    "WITH a AS (SELECT id FROM users), b AS (SELECT id FROM a) SELECT id FROM b;",
+    "WITH a AS (SELECT id FROM b), b AS (SELECT id FROM users) SELECT id FROM a;",
+    "SELECT id FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id);",
+    "SELECT id, (SELECT count(*) FROM orders WHERE orders.user_id = users.id) FROM users;",
+    "SELECT id FROM (SELECT id FROM users);",
+    "SELECT users.name FROM users AS u;",
+    "SELECT U.name FROM users AS u;",
+]
+
+
+def test_sql_check_agrees_with_sqlite3_on_what_resolves() -> None:
+    """The enforcing engine's reading, not this module's: every query above passes the check
+    exactly when sqlite3 runs it. Before the fix 6 of the first 8 such queries disagreed."""
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "".join(
+            f"CREATE TABLE {table} ({', '.join(columns)});"
+            for table, columns in SCHEMA.items()
+            if columns
+        )
+    )
+    both_ways = {True: 0, False: 0}
+    disagree = []
+    for query in SQLITE_JUDGED:
+        try:
+            db.execute(query).fetchall()
+            runs = True
+        except sqlite3.Error:
+            runs = False
+        both_ways[runs] += 1
+        said = [problem.message for problem in check_text("q.sql", query, "sqlite", dict(SCHEMA))]
+        if runs != (not said):
+            disagree.append((query, "sqlite3 runs it" if runs else "sqlite3 refuses it", said))
+    assert disagree == [], disagree
+    assert both_ways[True] >= 5, both_ways  # the table holds queries sqlite3 runs
+    assert both_ways[False] >= 5, both_ways  # and queries it refuses
