@@ -2286,6 +2286,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="A JSON Schema file every document must match: a violation is refused at the "
         "line and column the node it lands on starts, and names that node's document path.",
     )
+    sql_cmd = sub.add_parser(
+        "sql-check",
+        help="Resolves every table and column named in the .sql files you name against a "
+        "schema snapshot, in the dialect you name. A name the snapshot does not hold is "
+        "refused at the line and column it starts at. A file that does not parse is refused.",
+    )
+    sql_cmd.add_argument("paths", nargs="+", help="The .sql files to check.")
+    sql_cmd.add_argument(
+        "--dialect",
+        required=True,
+        metavar="D",
+        help="The SQL dialect to parse with, as sqlglot names it (duckdb, postgres, mysql, ...).",
+    )
+    sql_cmd.add_argument(
+        "--schema",
+        required=True,
+        metavar="S.json",
+        help="The schema snapshot: a JSON object mapping each table name to the list of its "
+        'column names, for example {"users": ["id", "name"], "orders": ["id"]}.',
+    )
     answers_cmd = sub.add_parser("answers", help="Show this month's Brave Answers spend.")
     answers_cmd.add_argument("answers_action", choices=["status"])
     auto = sub.add_parser(
@@ -2664,6 +2684,7 @@ def main(
         "capabilities",
         "index",
         "yaml-check",
+        "sql-check",
     ):
         return 0
     if args.command == "capabilities":
@@ -2689,6 +2710,23 @@ def main(
             )
             return 2
         return check_paths(args.paths, stdout=stdout or sys.stdout, schema=args.schema)
+    if args.command == "sql-check":
+        try:
+            from saddle.sqlcheck import check_paths as check_sql_paths
+        except ImportError as exc:
+            print(
+                "error: saddle sql-check needs sqlglot, which the `sql` extra installs: "
+                f"pip install 'saddle[sql]' ({exc})",
+                file=stderr or sys.stderr,
+            )
+            return 2
+        return check_sql_paths(
+            args.paths,
+            dialect=args.dialect,
+            schema=args.schema,
+            stdout=stdout or sys.stdout,
+            stderr=stderr or sys.stderr,
+        )
     if args.command == "answers":
         return run_answers(
             args.answers_action, stdout=stdout or sys.stdout, stderr=stderr or sys.stderr
