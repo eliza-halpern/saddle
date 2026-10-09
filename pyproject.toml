@@ -184,6 +184,12 @@ gate-stage-languages = { ruff = ["python"], mypy = ["python"], shellcheck = ["sh
 # cache, and with uv hidden that stage could never start (#167). Read like
 # test-timeout, from the starting commit.
 sandbox-expose = ["node", "google-chrome", "uv"]
+# CONTRIBUTING.md states this repository's commit rules -- a one-sentence contract, the
+# direction of any contract change, and the mutants with their verdicts -- so a run's
+# commit on this tree carries them, built from the run's own audit rather than rewritten
+# by hand (docs/CLI.md, "The commit rules a project states"). Read like test-timeout, from
+# the starting commit, so it applies to runs that start after it lands.
+commit-rules = true
 
 [tool.mutmut]
 # Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.

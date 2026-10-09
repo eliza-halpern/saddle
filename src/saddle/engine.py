@@ -85,6 +85,8 @@ from saddle.tools import (
     BLOCKED_TOOL,
     CHECK_TOOL,
     DISPUTE_TOOL,
+    FINISH_CONTRACT,
+    FINISH_DIRECTION,
     FINISH_TOOL,
     INSTALL_TOOL,
     PREMISE_TOOL,
@@ -583,6 +585,21 @@ class AutoRun:
     outcome: str = ""
     reason: str = ""
     narrative: str = ""
+    contract: str = ""
+    direction: str = ""
+    """What the model's last `finish` stated for a project that states its commit
+    rules (`evidence.commit_rules`): `contract`, the change's one-sentence contract,
+    and `direction`, the direction of any contract change, each exactly as the call
+    gave it and "" when it gave no such string. `auto.commit_block` writes a "" as
+    `COMMIT_UNDETERMINED` rather than guess one, and `auto.run_auto` puts both in the
+    run's commit only when the project states the rules."""
+    commit_mutants: Callable[[], tuple[tuple[str, str], ...]] | None = None
+    """`auto` injects `feed.AuditFeed.committed_mutants`: every mutant the run's last
+    audit that scored any scored, as `(name, status)` in the order that record gives
+    them. None where there is no audit to record one (arm E), which has no mutation
+    record at all. The commit's Mutants block is built from this and from nothing the
+    model wrote, so a mutant it names in its summary that no audit scored is not in
+    the block."""
     span_hashes: list[str] = field(default_factory=list)
     refusals: int = 0
     feed: AuditHooks | None = None
@@ -2026,6 +2043,8 @@ def _finish(auto: AutoRun, arguments: str) -> str:
     summary = args.get("summary") if isinstance(args, dict) else None
     if not isinstance(summary, str):
         return "error: finish needs a string summary argument"
+    auto.contract = _finish_said(args, FINISH_CONTRACT)
+    auto.direction = _finish_said(args, FINISH_DIRECTION)
     if auto.summary_return and auto.summary_returned is None and auto.summary_names is not None:
         try:
             missing = auto.summary_names(summary)
@@ -2255,6 +2274,28 @@ def _blocked(auto: AutoRun, arguments: str) -> str:
 
 NARRATIVE_LABEL: Final = "narrative, not evidence"
 
+COMMIT_DIRECTIONS: Final = ("tightened", "loosened", "scope narrowed")
+"""The directions a contract change may be labelled with, in the words
+CONTRIBUTING.md asks for. `auto.commit_block` prints a `direction` outside these
+three as `COMMIT_UNDETERMINED`: a label that is not one of the project's three says
+nothing about the change, and guessing which one the model meant would put a claim
+about the contract in the commit that the model never made."""
+
+COMMIT_UNDETERMINED: Final = "undetermined"
+"""What a run writes for a commit field it cannot determine. The alternative is a
+guess, and a guessed direction reads as a stated change to a contract nobody stated."""
+
+
+def _finish_said(args: object, name: str) -> str:
+    """One of `finish`'s optional commit-rule strings, exactly as the model gave it.
+
+    `contract` and `direction` are the model's statement of the change, so they are
+    taken as given: returned stripped, and "" when the call gives no such key, gives
+    it as anything but a string, or is not JSON at all. "" is not a value to print;
+    `auto.commit_block` names such a field undetermined."""
+    value = args.get(name) if isinstance(args, dict) else None
+    return value.strip() if isinstance(value, str) else ""
+
 
 def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[str, Any]]) -> None:
     """The run's last span: how it ended, and what it did, before the proof.
@@ -2297,6 +2338,18 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "reason": auto.reason,
         "narrative_label": NARRATIVE_LABEL,
         "narrative": auto.narrative,
+        # What `finish` stated for a project that states its commit rules, and what the
+        # run's mutation record actually scored. `auto` builds the commit block from
+        # these same values, so the ledger carries the account the commit shows: a
+        # message rewritten by hand afterwards can be compared with what the run said
+        # and what its audits found.
+        "commit_contract": auto.contract,
+        "commit_direction": auto.direction,
+        "commit_mutants": (
+            [{"name": name, "status": status} for name, status in auto.commit_mutants()]
+            if auto.commit_mutants is not None
+            else None
+        ),
         "files_changed": files,
         "commands": commands,
         "rounds": len(rounds),

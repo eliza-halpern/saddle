@@ -145,6 +145,15 @@ PROMPT_BENCHMARK_MARGIN_KEY: Final = "prompt-benchmark-margin"
 (`prompt_benchmark`): further, the finding fails. Needs `prompt-benchmark`; the
 audit then runs the command on the baseline tree too."""
 
+COMMIT_RULES_KEY: Final = "commit-rules"
+"""Whether the project states the commit-message rules its own runs must follow:
+`commit-rules = true` in the `[tool.saddle]` table of its `pyproject.toml`
+(`commit_rules`). With it, `saddle auto` builds its run's commit message from
+the run's own evidence -- the contract and direction the model states, and the
+mutants of the audit's mutation record with their statuses -- and without it the
+message is what it has always been: a subject line, the narrative and the
+anchors."""
+
 SADDLE_KEYS: Final = (
     SUITE_LIMIT_KEY,
     SUITE_WORKERS_KEY,
@@ -155,6 +164,7 @@ SADDLE_KEYS: Final = (
     PROMPT_BENCHMARK_KEY,
     PROMPT_BENCHMARK_FLOOR_KEY,
     PROMPT_BENCHMARK_MARGIN_KEY,
+    COMMIT_RULES_KEY,
 )
 """Every key saddle reads in `[tool.saddle]`. Any other key there is refused
 (`_committed_saddle_table`): a typo must not read as "not set"."""
@@ -815,6 +825,31 @@ def sandbox_expose(tree: Path, rev: str) -> tuple[str, ...]:
         )
         raise SuiteLimitError(msg)
     return tuple(value)
+
+
+def commit_rules(tree: Path, rev: str) -> bool:
+    """Whether the project states the commit-message rules its runs follow, as
+    committed at `rev`; False when it sets none.
+
+    `commit-rules = true` in the `[tool.saddle]` table of the
+    `pyproject.toml` in `tree`'s own directory sets it. Read exactly where and
+    how `suite_limit` reads `test-timeout`, so a run cannot give itself rules it
+    did not start with: the `pyproject.toml` its model edits changes nothing for
+    the commit the run ends on. A value that is not `true` or `false` (the string
+    `"true"`, a `0`) raises `SuiteLimitError` naming the commit and the value: a
+    typo must not read as "no rules" and quietly keep the old message.
+    """
+    table, where = _committed_saddle_table(tree, rev, "the commit rules")
+    if table is None or COMMIT_RULES_KEY not in table:
+        return False
+    value = table[COMMIT_RULES_KEY]
+    if not isinstance(value, bool):
+        msg = (
+            f"cannot read the commit rules: {where}: {COMMIT_RULES_KEY} = {value!r} "
+            "is not `true` or `false`"
+        )
+        raise SuiteLimitError(msg)
+    return value
 
 
 @dataclass(frozen=True)

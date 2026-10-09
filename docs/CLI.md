@@ -75,8 +75,8 @@ test-timeout = 3600   # seconds
   is judged under. An edit of yours takes effect once it is committed.
 - The value is a number of seconds above 0 and at most 86400 (a day). The keys saddle
   reads in `[tool.saddle]` are `test-timeout`, `test-workers`, `sandbox-expose` and
-  `gate-checks` and `gate-stage-languages` (both below), `static-check`, and `prompt-benchmark` with its floor and
-  margin (below).
+  `gate-checks` and `gate-stage-languages` (both below), `static-check`, `commit-rules`
+  (below), and `prompt-benchmark` with its floor and margin (below).
 - A value that is not usable stops the audit instead of falling back to 300 s. This
   covers a string such as `"2400"`, `true`, zero, more than a day, another key in the
   table (such as the typo `test_timeout`), or a `pyproject.toml` that is not TOML. The
@@ -242,6 +242,45 @@ sandbox-expose = ["node", "google-chrome"]
 - The audit's own runs read it (`saddle audit`, and the checkpoints, finish audit and
   test-impact map of `saddle auto` and the chat's Task runs). `saddle run` and the
   commands the model itself runs in its sandbox read only the environment variable.
+
+## The commit rules a project states
+
+A project whose commits must carry a stated contract says so in the same table:
+
+```toml
+[tool.saddle]
+commit-rules = true
+```
+
+`saddle auto` then builds the run's commit message from the run's own evidence. After the
+subject line and before the model's narrative, the message carries:
+
+```text
+Contract (as the model states it): <what `finish` gave as `contract`, or undetermined>
+Direction (as the model states it): <tightened | loosened | scope narrowed | undetermined>
+Mutants (from the run's mutation record):
+- <mutant>: <status>
+```
+
+- The contract and the direction are what the model stated in its `finish` call, written as
+  it stated them. A `direction` that is not one of `tightened`, `loosened` or
+  `scope narrowed`, and a missing contract, are written as `undetermined`: the run never
+  puts a direction in the commit that the model did not state.
+- The mutant lines are the audit's, never the model's account of it: one line per mutant of
+  the last audit that scored mutants (`feed.AuditFeed.committed_mutants`), in that audit's
+  order, with the status it recorded. A mutant the model names in its summary or contract
+  is not in the block unless an audit scored it, and stays in the narrative, where it reads
+  as the model's claim. A run whose audits scored nothing writes `- none recorded`.
+- Like `test-timeout`, the key is read from the commit the work starts from, so a run cannot
+  give itself the rules by editing `pyproject.toml` in its own worktree. A value that is not
+  `true` or `false`, and a typo of the key, are refused by name where the other keys are
+  refused (`error: cannot read the commit rules: pyproject.toml at <commit>: …`), and leave
+  the message as it is today: the block is added only to a run whose project asked for it.
+- Without the key the message is the one saddle commits today: the subject line, the
+  narrative and the anchor trailers. `tests/test_commit_rules.py` holds the three cases -- a
+  tree with the key, a tree without it, and a mutant the model claimed that no audit scored.
+
+CONTRIBUTING.md states the rules for this repository, which is why saddle sets the key.
 
 ## A prompt benchmark for changed prompts
 
