@@ -1912,6 +1912,30 @@ def chat_console(stdout: IO[str]) -> Console:
     return Console(file=stdout)
 
 
+def snapshot_marks(text: str) -> tuple[int, ...]:
+    """`--snapshot-marks 1800,3600,5400,7200`: whole elapsed seconds, comma-separated.
+
+    Each mark is a positive whole number of seconds from the run's start. An empty value
+    asks for no copies at all. Anything else is refused before the run starts: a mark
+    that is not a moment in time (`0`, `-5`, a word) would be reached by every request
+    and copy the tree once per request instead of once per mark.
+    """
+    marks: list[int] = []
+    for part in text.split(","):
+        if not part.strip():
+            continue
+        try:
+            mark = int(part)
+        except ValueError:
+            msg = f"--snapshot-marks {part!r} is not a whole number of seconds"
+            raise argparse.ArgumentTypeError(msg) from None
+        if mark <= 0:
+            msg = f"--snapshot-marks {part!r} is not a positive number of seconds"
+            raise argparse.ArgumentTypeError(msg)
+        marks.append(mark)
+    return tuple(marks)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -2320,6 +2344,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wall-clock seconds before an honest stop; 0 (the default) is no time limit.",
     )
     auto.add_argument(
+        "--snapshot-marks",
+        type=snapshot_marks,
+        default=(),
+        metavar="SECONDS",
+        help="Whole seconds, comma-separated (for example 1800,3600,5400,7200), at each of "
+        "which a copy of the run's worktree is kept beside its ledger, in the format a "
+        "plain agent's snapshots use: snapshots/m<mark>/tree and its record, hashed "
+        "(snapshots.Snapshots). The run copies its tree at every mark its clock has reached "
+        "and has not copied yet, before each request to the model and once when it ends; a "
+        "mark it does not live to is never taken. Empty (the default) keeps no copies.",
+    )
+    auto.add_argument(
         "--token-budget",
         type=int,
         default=DEFAULT_TOKEN_BUDGET,
@@ -2471,6 +2507,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         repo=Path(args.repo),
         time_budget_s=args.time_budget,
         token_budget=args.token_budget,
+        snapshot_marks_s=args.snapshot_marks,
         allow_test_edits=args.allow_test_edits,
         coauthor=not args.no_coauthor,
         format_at_finish=args.format_at_finish,

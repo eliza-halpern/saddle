@@ -79,6 +79,7 @@ from saddle.memory import (
 )
 from saddle.recall import Recall
 from saddle.sandbox import Terminal
+from saddle.snapshots import Snapshots
 from saddle.suiterun import starts_whole_suite
 from saddle.summary_names import SummaryNamesError
 from saddle.tools import (
@@ -580,6 +581,11 @@ class AutoRun:
     run_span: str
     """The `auto:start` span every tool span of this run cites as parent."""
     changed_files: Callable[[], list[str]] = list
+    snapshot: Snapshots | None = None
+    """The run's timed copies of its own worktree (`snapshots.Snapshots`), when `saddle
+    auto --snapshot-marks` gave it marks. `run_turn` asks it for the copies its clock has
+    reached that it does not hold yet before each request to the model, and once more when
+    its loop ends, before the outcome span is sealed. None: the run keeps no copies."""
     outcome: str = ""
     reason: str = ""
     narrative: str = ""
@@ -1150,6 +1156,11 @@ def run_turn(
                 rounds.append({"person": said})
                 yield MessageDelivered(text=said)
             if auto is not None:
+                # `--snapshot-marks`: before each request, not once per turn, so a mark
+                # the run reaches while a reply is streaming is copied at the next look
+                # at its tree.
+                if auto.snapshot is not None:
+                    auto.snapshot.snapshot_due(auto.budget.elapsed())
                 spent = auto.budget.exhausted()
                 if spent is not None:
                     auto.stop(spent)
@@ -1465,6 +1476,11 @@ def run_turn(
         if auto is not None:
             auto.stop("cancelled")
     if auto is not None:
+        # The run's last look at its own tree, before its outcome is sealed: a mark the
+        # clock reached while the final reply was streaming, or one it reached only after
+        # the run's last request, is copied here rather than left out of the record.
+        if auto.snapshot is not None:
+            auto.snapshot.snapshot_due(auto.budget.elapsed())
         auto.stop("the loop ended without finish")  # a no-op once outcome is set
         if auto.feed is not None:
             auto.feed.close()
