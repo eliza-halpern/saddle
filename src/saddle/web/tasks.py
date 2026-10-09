@@ -50,6 +50,7 @@ from saddle.installs import WheelFolder
 from saddle.journal import SpanRecord, append_span, build_span, read_entries, read_spans
 from saddle.memory import is_test_command
 from saddle.packet import compile_packet, render_packet_text
+from saddle.sessions import session_used_research
 from saddle.transcript import session_line
 
 RECAP_PREFIX: Final = "[saddle task "
@@ -503,7 +504,11 @@ def execute(
         return "failed", None
     for line in run.new_lines():
         publish(line)
-    packet = compile_packet(run.journal, run_id=run.run_id)
+    # The session read the web or it did not, read from the spans it sealed (#93), so the
+    # recap kept as a message says it too and a person who reloads still sees it.
+    packet = compile_packet(
+        run.journal, run_id=run.run_id, used_research=session_used_research(chat_journal)
+    )
     run.end_spend(packet.spend)
     run.state = ended_state(packet.verdict)
     start = next((s for s in read_spans(run.journal) if s.name == "auto:start"), None)

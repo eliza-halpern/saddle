@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any, Final
 
 from saddle.engine import CHAT_TEMPERATURE
+from saddle.journal import read_spans
+from saddle.research import RESEARCH_TOOL
 
 DEFAULT_ROOT: Final = Path.home() / ".saddle" / "sessions"
 
@@ -181,6 +183,20 @@ class Session:
             return self.system_prompt
         table = BUILTIN_PERSONAS if personas is None else personas
         return table.get(self.persona, "")
+
+
+def session_used_research(journal: Path) -> bool:
+    """Whether the session whose journal this is made a `research` tool call (#93).
+
+    The record is what the session sealed itself: `engine.run_turn` seals one tool span per
+    call, with the tool's name as `argv[0]`, whatever it returned -- a typed value, an
+    untrusted summary, nothing found (`refused: ...`), or a call that died mid-turn. Read it
+    back from the journal and the answer outlives the turn: a packet compiled later, a recap
+    re-read or a page reloaded says the same thing the live session did. The reader's own
+    tool calls are sealed beside them under `<node>#reader` and are not the session's call.
+    """
+    sealed = read_spans(journal)
+    return any(span.kind == "tool" and span.argv[:1] == [RESEARCH_TOOL] for span in sealed)
 
 
 class SessionStore:
@@ -577,6 +593,10 @@ class SessionStore:
             if isinstance(row, dict):
                 rows.append(row)
         return rows
+
+    def research_used(self, session_id: str) -> bool:
+        """Whether this session made a `research` tool call, read from the spans it sealed."""
+        return session_used_research(self.journal_path(session_id))
 
     def record_conditions(self, session_id: str, row: dict[str, Any]) -> None:
         """Append one row to the session's conditions record."""
