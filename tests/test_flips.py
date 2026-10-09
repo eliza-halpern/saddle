@@ -622,3 +622,24 @@ def test_a_good_flip_line_is_accepted_as_not_proven_never_as_a_pass() -> None:
     assert "flipped test(s): adds" in got.detail
     assert "needs a person's review" in got.detail
     assert "2 + 3 is 5" in got.detail
+
+
+def test_a_line_that_writes_flip_but_is_not_read_as_one_is_quoted_back() -> None:
+    """Known-bad, from #93's label run: its only label was a heading, `## flip: <file> --
+    <evidence>`, and its refusal said `[no flip line]` beside a line the worker could see
+    in its own summary. Known-good: the same line without the heading labels the test."""
+    heading = "## flip: adds -- 2 + 3 is 5 and the old assertion said 4"
+    got = judge([CHANGE], heading)
+    assert got is not None
+    assert got.verdict == "fail"
+    assert f"[no flip line: {heading!r} {tc.NEAR_MISS_SAID}]" in got.detail
+    numbered = judge([CHANGE], "1. flip: adds -- 2 + 3 is 5 and the old assertion said 4")
+    assert numbered is not None
+    assert tc.NEAR_MISS_SAID in numbered.detail  # still not read, now said so
+    plain = judge([CHANGE], heading.removeprefix("## "))
+    assert plain is not None
+    assert plain.verdict == "not-proven"  # read, and carried for a person's review
+    elsewhere = judge([CHANGE], "## flip: subtracts -- 2 - 3 is -1")
+    assert elsewhere is not None
+    assert "[no flip line]" in elsewhere.detail  # a line naming another test is not quoted
+    assert tc.NEAR_MISS_SAID not in elsewhere.detail

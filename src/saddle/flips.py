@@ -709,6 +709,13 @@ def _other(path: str, head: str | None) -> ChangedTest:
 
 # A list bullet may lead the line: a summary written as a markdown list is still labelled.
 _FLIP_LINE: Final = re.compile(r"^\s*(?:[-*+]\s+)?flip:\s*(?P<rest>.*)$", re.IGNORECASE)
+NEAR_MISS_SAID: Final = (
+    "is not read as a flip line: write it starting with `flip:`, with at most a "
+    "`- `, `* ` or `+ ` bullet before it, not a heading, a number or bold"
+)
+"""Why a line that writes `flip:` and a changed test's name labels nothing. #93's label
+run wrote `## flip: <its file> -- <evidence>` as a heading, and its refusal said only
+`[no flip line]`, beside a line the worker could see in its own summary."""
 _QUOTES: Final = "\"'`"
 _NODE_PREFIX: Final = re.compile(r"[\w./-]+\.py::(?:\w+::)*")
 """A pytest node id's path and class part, before the test's own name."""
@@ -778,6 +785,21 @@ def unmatched_flips(message: str, names: Collection[str]) -> list[str]:
         if not any(_after_name(_bare(rest), name) is not None for name in names):
             unmatched.append(_EVIDENCE_SEPARATOR.split(rest, maxsplit=1)[0].strip())
     return unmatched
+
+
+def near_miss_flips(message: str, names: Collection[str]) -> dict[str, str]:
+    """For each of `names`, the first line of `message` that writes `flip:` and that name
+    but is not read as a flip line (`_FLIP_LINE`): a heading, a numbered item, a bold
+    label. The refusal quotes it, so the worker sees which of its own lines was not read
+    and why (`NEAR_MISS_SAID`), not a bare `[no flip line]` beside a line it can see."""
+    found: dict[str, str] = {}
+    for line in message.splitlines():
+        if "flip:" not in line.lower() or _FLIP_LINE.match(line):
+            continue
+        for name in names:
+            if name not in found and name in line:
+                found[name] = line.strip()
+    return found
 
 
 def _after_name(rest: str, name: str) -> str | None:
@@ -868,10 +890,13 @@ def judge(changes: list[ChangedTest], message: str) -> Judgement | None:
         # The tests still owed a line come first, each marked before its detail, so a
         # reader who sees only the start of this text (the feed caps it) sees them.
         owed = [c for c in changes if c.name in refused or c.name in unlabelled]
+        near = near_miss_flips(message, unlabelled)
         for change in owed + [c for c in changes if c not in owed]:
             note = ""
             if change.name in refused:
                 note = f" [flip line refused: {refused[change.name]}]"
+            elif change.name in near:
+                note = f" [no flip line: {_short(near[change.name], 160)!r} {NEAR_MISS_SAID}]"
             elif change.name in unlabelled:
                 note = " [no flip line]"
             lines.append(
