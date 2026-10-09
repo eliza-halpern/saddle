@@ -17,6 +17,7 @@ notices.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -144,18 +145,24 @@ def test_an_effort_change_is_marked_and_lined_and_a_reload_keeps_the_line(
         assert seen["lines"][0].endswith("conditions changed: effort medium → xhigh"), seen
 
 
-@needs_chrome
-def test_a_capability_switched_on_mid_session_is_noticed_and_lined(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Switched on from outside the page (`saddle capabilities enable`, say) while
-    it is open: the page's next look marks the chip and lines the transcript."""
-    with served_chat(tmp_path, capability_probe=probe) as site:
-        # Once the page has shown the start, the switch is turned on.
-        flip = threading.Timer(2.0, lambda: monkeypatch.setenv(capabilities.OVERRIDE_ENV, "images"))
+def _switched_on_mid_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, looks: conditions.Probe
+) -> dict[str, Any]:
+    """The page's strip before and after the images switch is turned on from outside it."""
+    with served_chat(tmp_path, capability_probe=looks) as site:
+        # Once the page has shown the start, the switch is turned on. The start is what
+        # the page's first look recorded (`check_conditions`), so the switch waits for
+        # that record, not for a clock that a loaded machine's page can be slower than.
+        def flip_after_the_start() -> None:
+            deadline = time.monotonic() + 30.0
+            while not site.store.conditions(site.sid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            monkeypatch.setenv(capabilities.OVERRIDE_ENV, "images")
+
+        flip = threading.Thread(target=flip_after_the_start, daemon=True)
         flip.start()
         try:
-            got = drive_page(
+            got: dict[str, Any] = drive_page(
                 site.base,
                 f"""
                 await page.chat(args.sid);
@@ -171,7 +178,40 @@ def test_a_capability_switched_on_mid_session_is_noticed_and_lined(
                 sid=site.sid,
             )
         finally:
-            flip.cancel()
+            flip.join(timeout=31.0)
+    return got
+
+
+@needs_chrome
+def test_a_capability_switched_on_after_a_slow_first_look_is_still_noticed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The test below flaked in a full gate on 2026-10-08, timing out on the change
+    line. Its switch was turned on by a 2 s timer, which can fire before a loaded
+    machine's page has even looked. The page's first look then already saw images
+    on, recorded that as the start, and no change ever came. A first look made slow
+    here opens that window every time."""
+    looked: list[bool] = []
+
+    def slow_first_look() -> list[conditions.Row]:
+        if not looked:
+            time.sleep(2.5)
+        looked.append(True)
+        return probe()
+
+    _noticed(_switched_on_mid_session(tmp_path, monkeypatch, slow_first_look))
+
+
+@needs_chrome
+def test_a_capability_switched_on_mid_session_is_noticed_and_lined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switched on from outside the page (`saddle capabilities enable`, say) while
+    it is open: the page's next look marks the chip and lines the transcript."""
+    _noticed(_switched_on_mid_session(tmp_path, monkeypatch, probe))
+
+
+def _noticed(got: dict[str, Any]) -> None:
     images = 3 + capabilities.NAMES.index("images")
     assert got["before"]["chips"][images][0] == "images off"
     assert got["before"]["lines"] == []
