@@ -15,7 +15,7 @@ import sys
 import time
 import tomllib
 import warnings
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any, Final
 
@@ -1587,6 +1587,59 @@ def test_mutation_sample_uses_one_lookup_subprocess_not_one_per_mutant(
     spans = read_spans(journal)
     lookup_spans = [s for s in spans if any("saddle-mutant-lookup" in part for part in s.argv)]
     assert len(lookup_spans) == 1
+
+
+def test_a_lookup_given_names_diffs_those_and_no_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good and known-bad, real engine: with `names`, the lookup returns each
+    named mutant exactly as the full lookup does, and nothing it was not asked for;
+    an empty list diffs nothing."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _mutant_shapes_workdir(tmp_path)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    _build_real_scratch(workdir, scratch, {"test_a.py", "test_b.py"})
+    every = show_all_mutants(scratch)
+    assert len(every) > 1, "the fixture must have mutants to leave out"
+    name = sorted(every)[0]
+    assert show_all_mutants(scratch, names=[name]) == {name: every[name]}
+    assert show_all_mutants(scratch, names=[]) == {}
+
+
+def test_mutation_sample_looks_up_only_the_mutants_mutmut_decided(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad, real engine: a mutant mutmut never ran is not diffed. Only `f`'s
+    line changes, so mutmut runs `f`'s mutants and leaves the method's and the other
+    modules' not checked; a lookup of every mutant diffed thousands of those in one
+    check (over ten minutes, 3 GB), and the gate reads none of them."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _mutant_shapes_workdir(tmp_path)
+    asked: list[list[str] | None] = []
+    everything: list[dict[str, str]] = []
+    real = evidence_module.show_all_mutants
+
+    def spy(
+        scratch: Path,
+        *,
+        recorder: SpanRecorder | None = None,
+        names: Collection[str] | None = None,
+    ) -> dict[str, str]:
+        asked.append(None if names is None else sorted(names))
+        everything.append(real(scratch))
+        return real(scratch, recorder=recorder, names=names)
+
+    monkeypatch.setattr(evidence_module, "show_all_mutants", spy)
+    changed = {(str(workdir / "a.py"), 2)}
+    outcome = mutation_sample(workdir, changed, 10, test_files={"test_a.py", "test_b.py"})
+    assert outcome.total > 0
+    assert len(asked) == 1
+    names = asked[0]
+    assert names is not None
+    assert names
+    assert all(".x_f__mutmut_" in name for name in names)
+    assert len(everything[0]) > len(names)  # there were mutants to leave out
 
 
 def test_mutation_sample_names_a_failed_lookup_instead_of_reading_no_mutants(

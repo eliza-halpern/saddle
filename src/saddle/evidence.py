@@ -2774,21 +2774,27 @@ class MutantLookupError(RuntimeError):
 # The first file to name a key wins, matching `find_mutant`. A name whose
 # diff raises keeps only the header line, exactly what `show` printed to
 # stdout before its traceback -- today's silent per-name skip, preserved.
+# Given a file of names (argv[1], `LOOKUP_NAMES`), only those are diffed: a
+# diff re-parses its whole module, and one check on a three-module change
+# spent over ten minutes and 3 GB diffing 4,125 mutants mutmut never ran,
+# none of which the gate reads.
 _MUTANT_LOOKUP_SCRIPT: Final = r"""# saddle-mutant-lookup
 import json
 import sys
+from pathlib import Path
 
 from mutmut.mutation.data import SourceFileMutationData
 from mutmut.mutation.diff_apply import get_diff_for_mutant
 from mutmut.stats import status_by_exit_code
 from mutmut.utils.file_utils import walk_mutatable_files
 
+wanted = set(json.loads(Path(sys.argv[1]).read_text())) if len(sys.argv) > 1 else None
 mapping: dict[str, str] = {}
 for path in walk_mutatable_files():
     data = SourceFileMutationData(path=path)
     data.load()
     for name, exit_code in data.exit_code_by_key.items():
-        if name in mapping:
+        if name in mapping or (wanted is not None and name not in wanted):
             continue
         header = f"# {name}: {status_by_exit_code[exit_code]}\n"
         try:
@@ -2809,8 +2815,18 @@ def _lookup_failure(run: CapturedRun) -> MutantLookupError:
     return MutantLookupError(msg)
 
 
-def show_all_mutants(scratch: Path, *, recorder: SpanRecorder | None = None) -> dict[str, str]:
-    """`mutmut show NAME`'s stdout for every mutant, in one subprocess.
+LOOKUP_NAMES: Final = "saddle-lookup-names.json"
+"""The file in the scratch tree that names the mutants a lookup diffs (`show_all_mutants`)."""
+
+
+def show_all_mutants(
+    scratch: Path,
+    *,
+    recorder: SpanRecorder | None = None,
+    names: Collection[str] | None = None,
+) -> dict[str, str]:
+    """`mutmut show NAME`'s stdout for every mutant, in one subprocess; with
+    `names`, for those mutants only (the others are not diffed at all).
 
     Runs `_MUTANT_LOOKUP_SCRIPT` with `cwd=scratch`: mutmut's `config()` is a
     process-global cache read from `./pyproject.toml` and
@@ -2819,7 +2835,11 @@ def show_all_mutants(scratch: Path, *, recorder: SpanRecorder | None = None) -> 
     `scratch` rather than inside saddle's own process. Raises
     `MutantLookupError` on a non-zero exit or unparseable stdout.
     """
-    run = run_capture([sys.executable, "-c", _MUTANT_LOOKUP_SCRIPT], scratch, recorder=recorder)
+    argv = [sys.executable, "-c", _MUTANT_LOOKUP_SCRIPT]
+    if names is not None:
+        (scratch / LOOKUP_NAMES).write_text(json.dumps(sorted(names)), encoding="utf-8")
+        argv.append(LOOKUP_NAMES)
+    run = run_capture(argv, scratch, recorder=recorder)
     if run.exit_code != 0:
         raise _lookup_failure(run)
     try:
@@ -3097,8 +3117,11 @@ def mutation_sample(
         results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
         verdicts = _parse_mutant_verdicts(results.stdout)
         stats = mutmut_test_map(scratch)
+        # Only what the loop below reads: it skips a "not checked" mutant before
+        # looking it up, and a timed-out run leaves every mutant not checked.
+        decided = [name for name, verdict in verdicts.items() if verdict != "not checked"]
         try:
-            shows = show_all_mutants(scratch, recorder=recorder)
+            shows = show_all_mutants(scratch, recorder=recorder, names=decided)
         except MutantLookupError as exc:
             # A lookup failure is named, never read as "no mutants" (the
             # rule for `mutmut run`, extended to the batched lookup).

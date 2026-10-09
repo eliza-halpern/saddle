@@ -15,7 +15,7 @@ import signal
 import socket
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from pathlib import Path
 
 import pytest
@@ -206,7 +206,10 @@ def _no_real_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _replay_show_all_mutants(
-    scratch: Path, *, recorder: SpanRecorder | None = None
+    scratch: Path,
+    *,
+    recorder: SpanRecorder | None = None,
+    names: Collection[str] | None = None,
 ) -> dict[str, str]:
     """Stand-in for `evidence.show_all_mutants` under a PATH-stub `mutmut`.
 
@@ -222,9 +225,11 @@ def _replay_show_all_mutants(
     results = subprocess.run(
         ["mutmut", "results", "--all", "True"], cwd=scratch, capture_output=True, text=True
     )
-    names = re.findall(r"^\s*(\S+): ", results.stdout, re.MULTILINE)
+    listed = re.findall(r"^\s*(\S+): ", results.stdout, re.MULTILINE)
     mapping: dict[str, str] = {}
-    for name in names:
+    for name in listed:
+        if names is not None and name not in names:
+            continue  # as the production lookup: only the names it was given
         shown = subprocess.run(
             ["mutmut", "show", name], cwd=scratch, capture_output=True, text=True
         )
