@@ -1434,6 +1434,15 @@ def build_app(
             else tasks.journal_for(store.journal_path(sid), rid)
         )
 
+    def _used_research(sid: str) -> bool:
+        """Whether this session read the web (#93), read from the tool spans it stored.
+
+        Asked on each request, never remembered from the turn that made the call: a
+        packet, a `packet.md` or a diff read after a reload says it as plainly as one
+        read while the session was live.
+        """
+        return store.research_used(sid)
+
     async def task_packet(request: Request) -> JSONResponse:
         """The run's evidence packet, compiled from its ledger on every read."""
         sid, rid = request.path_params["sid"], request.path_params["rid"]
@@ -1446,9 +1455,13 @@ def build_app(
         parts = journal.parts
         shaped = len(parts) >= 4 and parts[-4:-2] == (".saddle", "runs")
         repo = Path(*parts[:-4]) if shaped else None
-        return JSONResponse(compile_packet(journal, run_id=rid, anchor_repo=repo).payload())
+        return JSONResponse(
+            compile_packet(
+                journal, run_id=rid, anchor_repo=repo, used_research=_used_research(sid)
+            ).payload()
+        )
 
-    def write_report(journal: Path, rid: str) -> tuple[Path, str]:
+    def write_report(sid: str, journal: Path, rid: str) -> tuple[Path, str]:
         """The full packet as text, written beside the run's ledger.
 
         `packet.md` sits in `.saddle/runs/<id>/` next to `proofs.jsonl`: inside
@@ -1456,7 +1469,9 @@ def build_app(
         asked, and rewritten on every read here so it never lags the ledger.
         The bytes are `render_packet_text` of the packet, unchanged.
         """
-        text = render_packet_text(compile_packet(journal, run_id=rid))
+        text = render_packet_text(
+            compile_packet(journal, run_id=rid, used_research=_used_research(sid))
+        )
         path = journal.parent / "packet.md"
         path.write_text(text, encoding="utf-8")
         return path, text
@@ -1467,7 +1482,7 @@ def build_app(
         journal = _journal(sid, rid)
         if journal is None:
             return JSONResponse({"error": "no such task in this session"}, status_code=404)
-        path, text = write_report(journal, rid)
+        path, text = write_report(sid, journal, rid)
         log = store.journal_path(sid).parent / "actions.log"
         branch_actions.log_action(log, rid, "download", str(path))
         return PlainTextResponse(
@@ -1498,7 +1513,7 @@ def build_app(
         if journal is None:
             msg = "no such task in this session"
             raise branch_actions.ActionRefusedError(msg, 404)
-        packet = compile_packet(journal, run_id=rid)
+        packet = compile_packet(journal, run_id=rid, used_research=_used_research(sid))
         try:
             root = repo_root(Path(store.get(sid).workdir))
         except AutoError as exc:
@@ -1516,7 +1531,7 @@ def build_app(
             return _refused(exc)
         journal = _journal(request.path_params["sid"], _rid)
         assert journal is not None  # _branch_context found it
-        report, _text = write_report(journal, _rid)
+        report, _text = write_report(request.path_params["sid"], journal, _rid)
         return JSONResponse(
             {
                 "branch": branch,

@@ -91,6 +91,13 @@ CLAIMS: Final = frozenset({"proven", "failed", "observed", "question", "cost"})
 
 NARRATIVE_LABEL: Final = "narrative, not evidence"
 
+USED_RESEARCH: Final = "used web research"
+"""A run whose session read the web (#93), as the packet header says it: one row a
+person reviewing the change reads before the diff, so they know untrusted web
+content informed it without opening the transcript. The packet is compiled from the
+run's ledger alone, and a session's research calls are journaled beside its chat, so
+the caller supplies the fact (`SessionStore.research_used`) rather than the ledger."""
+
 TOKEN_SOURCES: Final = ("usage", "estimate", "mixed", "none")
 """How an outcome sidecar may say its tokens were counted; `_spend` words each one."""
 
@@ -981,11 +988,20 @@ def _anchor_text(journal: Path, repo: Path | None, *, sealed: bool) -> str:
     return f"The branch anchor does not match: {', '.join(i.code for i in found)}. "
 
 
-def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None = None) -> Packet:
+def compile_packet(
+    journal: Path,
+    *,
+    run_id: str = "",
+    anchor_repo: Path | None = None,
+    used_research: bool = False,
+) -> Packet:
     """The packet for one run, from its ledger alone. No model call.
 
     With `anchor_repo`, the Reproduce row also reports the check of the
     ledger's outcome against its branch's `Saddle-Outcome` trailer.
+
+    `used_research` is the caller's answer to "did this run's session read the
+    web": it is not in the run's ledger (`USED_RESEARCH`).
     """
     run_id = run_id or journal.parent.name
     if not journal.exists():
@@ -1628,6 +1644,8 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     header = []
     if branch:
         header.append(f"branch {branch}")
+    if used_research:
+        header.append(USED_RESEARCH)
     if evidence is not None:
         header.append(f"{_n(len(files), 'file')} changed")
     if test_edits is not None:

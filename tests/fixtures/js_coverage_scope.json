@@ -34,6 +34,7 @@
     "tests/test_outside_ui.py",
     "tests/test_process_list_ui.py",
     "tests/test_paint_order.py",
+    "tests/test_research_label.py",
     "tests/test_research_panel_ui.py",
     "tests/test_run_again_ui.py",
     "tests/test_run_dot_colour_ui.py",
