@@ -43,6 +43,7 @@ from saddle.feed import (
 )
 from saddle.journal import attempt_sidecar_path, read_spans, verify_journal
 from saddle.packet import compile_packet
+from saddle.runclock import unstamped
 from saddle.tools import CHECK_TOOL
 from saddle.transcript import session_line
 from saddle.vllm import ToolCall, VllmClient
@@ -697,7 +698,8 @@ def test_a_whole_suite_check_says_what_it_cost_and_a_narrowed_one_does_not(repo:
     result, _ = run(repo, client, auditor=WholeSuiteAuditor())
     whole, narrowed = client.read["w"], client.read["k"]
     took = _took(check_spans(result)[0].duration_ms)
-    assert whole.endswith(WHOLE_SUITE_TOOK.format(took=took)), whole
+    # The check's own last line; the run's clock line follows it (#204).
+    assert unstamped(whole).endswith(WHOLE_SUITE_TOOK.format(took=took)), whole
     assert "whole-suite check took" not in narrowed, narrowed
 
 
@@ -725,7 +727,7 @@ def test_a_check_failing_only_what_finish_clears_says_to_finish(repo: Path) -> N
     client = Reading([[edit("e", "a - b", "a + b")], [CHECK]])
     run(repo, client, auditor=ChangedTestAuditor())
     said = client.read["k"]
-    assert said.endswith(ONLY_FINISH_CLEARS), said
+    assert unstamped(said).endswith(ONLY_FINISH_CLEARS), said
 
 
 def test_a_check_with_anything_else_failing_or_nothing_failing_says_nothing_of_it(

@@ -44,6 +44,7 @@ from saddle.journal import (
     read_spans,
     verify_journal,
 )
+from saddle.runclock import unstamped
 from saddle.tools import REFUSED, TOOLS, ToolContext, execute_tool, is_test_path
 from saddle.vllm import StreamToken, ToolCall, VllmClient, VllmRequestError
 
@@ -220,7 +221,7 @@ def test_finish_without_a_string_summary_does_not_finish(repo: Path) -> None:
     client = Scripted([bad, [call("finish", "f1", summary=3)], finish()])
     result = auto(repo, client)
     results = [m for m in client.asked[2]["messages"] if m["role"] == "tool"]
-    assert [m["content"] for m in results] == [
+    assert [unstamped(m["content"]) for m in results] == [  # without the clock line (#204)
         "error: finish needs a string summary argument",
         "error: finish needs a string summary argument",
     ]
@@ -993,7 +994,10 @@ def test_a_refusal_without_a_reason_is_refused_and_the_run_goes_on(
     assert (result.outcome, result.reason) == ("finished", "finish called")
     assert "refusal" not in sidecar(result)
     told = [m for m in client.asked[1]["messages"] if m.get("role") == "tool"]
-    assert told[-1]["content"] == "error: refuse refused: say why you are declining the task"
+    assert (  # the refusal as the tool said it, without the run's clock line (#204)
+        unstamped(told[-1]["content"])
+        == "error: refuse refused: say why you are declining the task"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1075,7 +1079,7 @@ def test_a_block_without_a_reason_and_an_attempt_is_refused_and_the_run_goes_on(
     assert (result.outcome, result.reason) == ("finished", "finish called")
     assert "blocked" not in sidecar(result)
     told = [m for m in client.asked[1]["messages"] if m.get("role") == "tool"]
-    assert told[-1]["content"] == f"error: blocked refused: say what {missing}"
+    assert unstamped(told[-1]["content"]) == f"error: blocked refused: say what {missing}"
 
 
 def test_a_block_after_hedging_past_the_warmup_is_a_block_not_a_stall(repo: Path) -> None:

@@ -49,6 +49,7 @@ from collections.abc import Callable, Sequence
 from pathlib import PurePosixPath
 from typing import Any, Final, Literal
 
+from saddle.runclock import plain_duration
 from saddle.vision import is_image_followup
 
 CHARS_PER_TOKEN: Final = 4
@@ -335,7 +336,9 @@ def run_state(
 def _budget_line(spent_tokens: int, token_budget: int, elapsed_s: float, time_s: float) -> str:
     """The state block's budget line. A budget of 0 or less is no limit, as the
     engine reads it (`engine.NO_LIMIT`, every run's default): read as a number,
-    it told every uncapped run it had 0 tokens and 0 s left (#187)."""
+    it told every uncapped run it had 0 tokens and 0 s left (#187). Time reads
+    as a person says it (`runclock.plain_duration`): "13816s used" was the only
+    elapsed time a 3.9-hour run saw, and nothing in it read as hours (#204)."""
     tokens = (
         f"{spent_tokens} of {token_budget} generated tokens used, "
         f"{max(token_budget - spent_tokens, 0)} left"
@@ -343,9 +346,10 @@ def _budget_line(spent_tokens: int, token_budget: int, elapsed_s: float, time_s:
         else f"{spent_tokens} generated tokens used, no cap"
     )
     time = (
-        f"{elapsed_s:.0f}s of {time_s:.0f}s used, {max(time_s - elapsed_s, 0):.0f}s left"
+        f"{plain_duration(elapsed_s)} of {plain_duration(time_s)} used, "
+        f"{plain_duration(max(time_s - elapsed_s, 0))} left"
         if time_s > 0
-        else f"{elapsed_s:.0f}s used, no time limit"
+        else f"{plain_duration(elapsed_s)} used, no time limit"
     )
     return f"- budget: {tokens}; {time}"
 

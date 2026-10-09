@@ -332,6 +332,11 @@ This command runs one task autonomously in a new worktree. The result is a branc
 With neither `--no-feedback` nor `--no-audit`, the arm is E+A+F: audits are delivered
 to the model, and a failing finish audit refuses `finish`.
 
+The model's system prompt says when the run started. Each tool result it reads ends
+with a clock line, such as `[clock: 20:41 EDT, 4 h 08 min into this task]`: the time
+of day and how long the run has gone. The clock is information, never a limit: a run
+with no budget still has none.
+
 While it runs, the command prints one line per tool call. At the end it prints:
 
 ```text

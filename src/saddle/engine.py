@@ -78,6 +78,7 @@ from saddle.memory import (
     trim_screenshots,
 )
 from saddle.recall import Recall
+from saddle.runclock import Wall, clock_line, stamp
 from saddle.sandbox import Terminal
 from saddle.suiterun import starts_whole_suite
 from saddle.summary_names import SummaryNamesError
@@ -579,6 +580,11 @@ class AutoRun:
     budget: RunBudget
     run_span: str
     """The `auto:start` span every tool span of this run cites as parent."""
+    wall: Wall | None = None
+    """The wall clock of the run's clock lines (#204): set, each request whose
+    newest message is a tool result ends it with `runclock.clock_line`, the time
+    of day from `wall` and how long the run has gone from `budget`. `run_auto`
+    always sets it; None stamps nothing."""
     changed_files: Callable[[], list[str]] = list
     outcome: str = ""
     reason: str = ""
@@ -1172,6 +1178,10 @@ def run_turn(
             # A compaction may have archived the first pieces: offer `recall` from
             # this request on, not the next turn (an autonomous run is one turn).
             options = replace(options, tools=offer_code_search(options.tools, ctx))
+            # After the compaction, so no request goes out without its clock line,
+            # and before the reply cap, which counts the line among the prompt.
+            if auto is not None and auto.wall is not None:
+                stamp(messages, clock_line(auto.wall(), auto.budget.elapsed()))
             parts: list[str] = []
             thoughts: list[str] = []
             calls: list[ToolCall] = []

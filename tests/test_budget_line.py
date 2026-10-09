@@ -35,22 +35,25 @@ def budget(token_budget: int, time_budget_s: float) -> str:
 
 def test_an_uncapped_run_is_told_it_has_no_limit() -> None:
     assert budget(NO_LIMIT, NO_LIMIT) == (
-        "- budget: 250 generated tokens used, no cap; 90s used, no time limit"
+        "- budget: 250 generated tokens used, no cap; 1 min 30 s used, no time limit"
     )
 
 
 def test_a_capped_run_reads_as_before_and_each_cap_by_its_own_rule() -> None:
+    """Time reads in plain words (#204); what is a cap and what is none is unchanged."""
     assert budget(1000, 600) == (
-        "- budget: 250 of 1000 generated tokens used, 750 left; 90s of 600s used, 510s left"
+        "- budget: 250 of 1000 generated tokens used, 750 left; "
+        "1 min 30 s of 10 min 00 s used, 8 min 30 s left"
     )
     assert budget(1000, NO_LIMIT) == (
-        "- budget: 250 of 1000 generated tokens used, 750 left; 90s used, no time limit"
+        "- budget: 250 of 1000 generated tokens used, 750 left; 1 min 30 s used, no time limit"
     )
     assert budget(NO_LIMIT, 600) == (
-        "- budget: 250 generated tokens used, no cap; 90s of 600s used, 510s left"
+        "- budget: 250 generated tokens used, no cap; "
+        "1 min 30 s of 10 min 00 s used, 8 min 30 s left"
     )
     assert budget(1, 1) == (  # the smallest cap is a cap
-        "- budget: 250 of 1 generated tokens used, 0 left; 90s of 1s used, 0s left"
+        "- budget: 250 of 1 generated tokens used, 0 left; 1 min 30 s of 1 s used, 0 s left"
     )
 
 

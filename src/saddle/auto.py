@@ -33,6 +33,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any, Final
@@ -86,6 +87,7 @@ from saddle.jsevidence import (
     stryker_invocation,
 )
 from saddle.recall import Recall
+from saddle.runclock import Wall, clock_prompt, local_now
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.summary_names import absent as absent_code_names
 from saddle.task_passes import baseline_sources, cut_calls
@@ -200,7 +202,7 @@ ENVIRONMENT_PROMPT: Final = (
     "never counted as proof. {python} {src}The audit runs "
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
-    "first. {stages}{budget}{workers}{coverage}{node}{detected}{js_mutation}{page}{feed}"
+    "first. {stages}{budget}{clock}{workers}{coverage}{node}{detected}{js_mutation}{page}{feed}"
 )
 
 DETECTED_TOOLS: Final = ("node", "npm", "google-chrome", "chromium", "uv")
@@ -299,6 +301,7 @@ def environment_prompt(
     exposed: Sequence[str] = (),
     refusal_cap: int = DEFAULT_FINISH_REFUSAL_CAP,
     check_tool: bool = False,
+    started: datetime | None = None,
 ) -> str:
     """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
     (the project venv, else whatever `python` or `python3` their PATH has),
@@ -350,6 +353,7 @@ def environment_prompt(
         test_command=AUDIT_TEST_COMMAND,
         stages=audit_stages(worktree),
         budget=budget_sentence(time_budget_s, token_budget),
+        clock=clock_prompt(started) if started is not None else "",
         coverage=coverage,
         workers=workers,
         node=NODE_TOOLS_PROMPT if node_tools else "",
@@ -631,6 +635,9 @@ class AutoOptions:
     168,034-token reply on the first round, which it refuses outright."""
     run_id: str = ""
     clock: Callable[[], float] = monotonic
+    wall: Wall = local_now
+    """The wall clock the run's start and its clock lines are read from (#204);
+    `clock` times the run itself. A test fixes both."""
     arm: Arm = "E+A+F"
     """E+A+F (default): audits at checkpoints and at finish, delivered as
     tool results, and a failing finish audit refuses `finish`. E+A
@@ -1091,6 +1098,7 @@ def run_auto(
         budget=RunBudget(
             time_s=options.time_budget_s, tokens=options.token_budget, clock=options.clock
         ),
+        wall=options.wall,
         run_span=start.span_id,
         changed_files=lambda: changed_files(worktree),
         prompt_check=(
@@ -1188,6 +1196,7 @@ def run_auto(
             check_tool=check_tool,
             node_tools=bool(mounted),
             exposed=named,
+            started=options.wall(),
             js_tests=(
                 js_test_files(worktree)
                 if stryker_entry(worktree, repo_root(repo)) is not None
