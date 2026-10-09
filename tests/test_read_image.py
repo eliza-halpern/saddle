@@ -23,6 +23,7 @@ import saddle.tools as tools_module
 from saddle.auto import AutoError, AutoOptions, run_auto
 from saddle.engine import TurnOptions, run_turn
 from saddle.events import Event, ToolEnd
+from saddle.runclock import unstamped
 from saddle.tools import ToolContext, execute_tool
 from saddle.vision import (
     GLYPHS,
@@ -447,7 +448,9 @@ def test_a_task_run_does_not_turn_images_on(tmp_path: Path) -> None:
     run_auto(AutoOptions(task="t", repo=repo, run_id="r1", arm="E"), cast(VllmClient, server))
     seen = server.asked[1]
     tool = next(m for m in seen if m["role"] == "tool")
-    assert tool["content"] == (repo / "shot.png").read_text(encoding="utf-8", errors="replace")
+    # The file as read, without the run's clock line after it (#204).
+    said = unstamped(tool["content"])
+    assert said == (repo / "shot.png").read_text(encoding="utf-8", errors="replace")
     assert not any(is_image_followup(m) for m in seen)
     assert server.probes == 0
     # nothing about images was added to what the Task model is offered or told

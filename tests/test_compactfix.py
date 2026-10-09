@@ -540,8 +540,9 @@ def test_r7_run_state_fields_known_good_and_known_bad() -> None:
     assert "FAILED t.py::x - boom" in test
     assert "E   noise" not in test
     assert "....F" not in test
-    assert _field(state, "budget") == (
-        "- budget: 250 of 1000 generated tokens used, 750 left; 90s of 600s used, 510s left"
+    assert _field(state, "budget") == (  # time in plain words since #204
+        "- budget: 250 of 1000 generated tokens used, 750 left; "
+        "1 min 30 s of 10 min 00 s used, 8 min 30 s left"
     )
     empty = run_state(
         files=[],
