@@ -78,7 +78,7 @@ from saddle.memory import (
     stale_copy,
     trim_screenshots,
 )
-from saddle.plan import Plan
+from saddle.plan import FINISH_RETURNED, Plan
 from saddle.recall import Recall
 from saddle.sandbox import Terminal
 from saddle.snapshots import Snapshots
@@ -494,7 +494,7 @@ FINISH_QUESTION: Final = (
 """`finish`'s result when the finish audit accepted the tree with a `question`."""
 
 PLAN_OPEN: Final = (
-    "finish returned, not refused: your plan has {n} open item(s).\n{items}\n"
+    FINISH_RETURNED + "{n} open item(s).\n{items}\n"
     "Close each with plan, action done and what shows it or action drop and why, then "
     "call finish again. This is asked once: the next finish is not returned for it, "
     "and any item still open is named in the run's record."

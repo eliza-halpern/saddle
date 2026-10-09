@@ -162,6 +162,10 @@ _OPEN_LINE: Final = re.compile(rf"^  {ID_PREFIX}(\d+): (.*)$")
 _CLOSED_LINE: Final = re.compile(rf"{ID_PREFIX}(\d+) (done|dropped)")
 _HIDDEN_LINE: Final = re.compile(r"^  \.\.\. and (\d+) more open item")
 
+FINISH_RETURNED: Final = "finish returned, not refused: your plan has "
+"""How `engine.PLAN_OPEN` opens: a resumed run whose conversation holds a `finish`
+answered this way has had its one reading of the open items (`Plan.from_messages`)."""
+
 SECTION_HEAD: Final = "- plan, in your own words as the plan tool keeps them: "
 """How the state block's plan section opens; `Plan.from_messages` finds it there."""
 
@@ -467,9 +471,11 @@ class Plan:
         ids already closed (their text is not kept there); the `plan` results after
         it in the messages add and close items by the ids they name. A result the
         note already reflects changes nothing: an id is added only once and closed
-        only while open."""
+        only while open. A `finish` already answered with the open items
+        (`FINISH_RETURNED`) is not answered so again."""
         plan = cls()
         calls: set[str] = set()
+        told = False
         for message in messages:
             if is_note(dict(message)):
                 parsed = cls._from_note(str(message.get("content") or ""))
@@ -481,6 +487,11 @@ class Plan:
                     calls.add(str(call.get("id")))
             if message.get("role") == "tool" and str(message.get("tool_call_id")) in calls:
                 plan._replay(str(message.get("content") or ""))
+            if message.get("role") == "tool" and str(message.get("content")).startswith(
+                FINISH_RETURNED
+            ):
+                told = True
+        plan.finish_told = told
         return plan
 
     @classmethod

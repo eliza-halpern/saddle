@@ -603,3 +603,112 @@ def test_a_reminder_reads_as_one_session_line(repo: Path) -> None:  # noqa: F811
 def test_a_diff_in_the_reasoning_is_no_list_of_steps() -> None:
     diff = "Next, the change:\n- return a - b\n+ return a + b\n+ add(2, 2)\n"
     assert listed_steps(diff) == []
+
+
+def test_two_blank_lines_end_a_list_and_an_empty_inline_part_is_no_step() -> None:
+    text = (
+        "Next steps:\n1. fix the E501\n2. add the VALUES fixture\n\n\n3. write the recursive test"
+    )
+    assert listed_steps(text) == [["fix the E501", "add the VALUES fixture"]]
+    assert listed_steps("add the fixtures (VALUES alias; ; quoted alias) now") == []
+
+
+def test_a_step_with_no_words_is_never_unplanned() -> None:
+    assert Plan().unplanned(["✓ —", "add the fixture"]) == ["add the fixture"]
+
+
+def test_a_note_without_a_plan_section_keeps_the_plan_and_stray_lines_are_skipped() -> None:
+    plan = Plan()
+    added = plan.apply(json.dumps({"action": "add", "items": ["write the alias fixture"]}))
+    bare = "[Earlier conversation compacted: 2 earlier message(s) dropped to fit the window.]\n- x"
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "p0", "type": "function", "function": {"name": "plan", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "p0", "content": added},
+        {"role": "user", "content": bare},
+    ]
+    resumed = Plan.from_messages(messages)
+    assert [(i.id, i.text) for i in resumed.items] == [("P1", "write the alias fixture")]
+    note = (
+        "[Earlier conversation compacted: 1 earlier message(s) dropped to fit the window.]\n"
+        f"{SECTION_HEAD}1 open, 0 done, 0 dropped\n  P1: shown\n  (stray)\n- files changed: none"
+    )
+    rebuilt = Plan.from_messages([{"role": "user", "content": note}])
+    assert [(i.id, i.text) for i in rebuilt.items] == [("P1", "shown")]
+
+
+def _recorded(tmp_path: Path) -> Path:
+    """A recorded request whose compaction note holds a plan section, as a run
+    with its plan on writes one."""
+    note = (
+        "[Earlier conversation compacted: 4 earlier message(s) dropped to fit the window.]\n"
+        f"{SECTION_HEAD}1 open, 1 done, 0 dropped\n  P2: write the alias fixture\n"
+        "  closed: P1 done\nRe-read files."
+    )
+    recorded = tmp_path / "request.json"
+    recorded.write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {"role": "system", "content": "Old prompt."},
+                    {"role": "user", "content": "make add add"},
+                    {"role": "user", "content": note},
+                ]
+            }
+        )
+    )
+    return recorded
+
+
+def test_a_resumed_run_keeps_the_plan_its_conversation_held(repo: Path) -> None:  # noqa: F811
+    client = Scripted([_plan_call("p1", action="show"), finish(call_id="f1"), finish(call_id="f2")])
+    result = auto(repo, client, resume_messages=_recorded(repo.parent))
+    shown = [m for m in client.asked[1]["messages"] if m.get("tool_call_id") == "p1"]
+    assert (
+        shown[0]["content"]
+        == "Plan: 1 open, 1 done, 0 dropped.\nOpen:\nP2: write the alias fixture"
+    )
+    assert result.outcome == "finished"
+    assert [i["id"] for i in sidecar(result)["plan"]] == ["P1", "P2"]
+
+
+def test_a_resumed_run_with_the_plan_off_keeps_none(repo: Path) -> None:  # noqa: F811
+    client = Scripted([_plan_call("p1", action="show"), finish()])
+    result = auto(repo, client, resume_messages=_recorded(repo.parent), plan=False)
+    assert PLAN_TOOL not in [t["function"]["name"] for t in client.asked[0]["tools"]]
+    assert "plan" not in sidecar(result)
+
+
+def test_a_resumed_finish_already_answered_with_the_open_items_is_not_answered_again(
+    repo: Path,  # noqa: F811
+) -> None:
+    """The recorded conversation ends with a finish the plan already returned once: the
+    resumed run's next finish is taken, as the run that recorded it would have taken it."""
+    recorded = _recorded(repo.parent)
+    body = json.loads(recorded.read_text())
+    body["messages"] += [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "f0", "type": "function", "function": {"name": "finish", "arguments": "{}"}},
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "f0",
+            "content": PLAN_OPEN.format(n=1, items="P2: write the alias fixture"),
+        },
+    ]
+    recorded.write_text(json.dumps(body))
+    assert Plan.from_messages(body["messages"]).finish_told
+    assert not Plan.from_messages(body["messages"][:-2]).finish_told
+    client = Scripted([finish()])
+    result = auto(repo, client, resume_messages=recorded)
+    assert result.outcome == "finished"
+    assert len(client.asked) == 1
