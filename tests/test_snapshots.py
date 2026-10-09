@@ -211,6 +211,20 @@ def test_a_copy_holds_every_file_of_the_tree_and_hashes_it_as_the_plain_agent_do
     assert digest == tree_hash(contents)
 
 
+def test_a_symlink_is_left_out_as_the_plain_agent_leaves_it_out(tmp_path: Path) -> None:
+    """Known-bad, found in review: a symlinked file was carried as its target's content,
+    where the plain agent's snapshotter skips every symlink. A tree with `CLAUDE.md ->
+    README.md` then held three files against the plain agent's two, and the hashes differed.
+    Known-good: the copy, its counts and its hash are those of the tree without its links."""
+    contents = build(tmp_path / "tree", {"README.md": b"hello\n", "pkg/a.py": b"x = 1\n"})
+    (tmp_path / "tree" / "CLAUDE.md").symlink_to("README.md")
+    (tmp_path / "tree" / "linked").symlink_to("pkg", target_is_directory=True)
+    files, size, digest = copy_tree(tmp_path / "tree", tmp_path / "copy")
+    assert kept(tmp_path / "copy") == contents
+    assert (files, size) == (2, sum(len(body) for body in contents.values()))
+    assert digest == tree_hash(contents)
+
+
 def test_the_hash_is_over_the_files_in_sorted_order_of_relative_path(tmp_path: Path) -> None:
     """Known-bad (the order the tree is walked in, a rotation of the sorted order, or its reverse):
     the plain agent's hash is fed in sorted order of relative path, and any other order gives a

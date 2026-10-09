@@ -88,17 +88,19 @@ def tree_files(root: Path) -> Iterator[Path]:
     """Every file under `root` a copy carries, in whatever order the tree presents them.
 
     A directory whose name is `skipped` is not descended into, so nothing under a `.venv`
-    or a run's own `.saddle` state reaches the copy. `os.walk` does not follow a symlink to
-    a directory, so nothing under one is copied; a symlink to a file is carried as that
-    file's content, and an entry that is not a file at all -- a link whose target is gone --
-    is left out rather than breaking the copy."""
+    or a run's own `.saddle` state reaches the copy. No symlink is carried, to a file or to
+    a directory, because the plain agent's snapshotter carries none: `os.walk` does not
+    follow a link to a directory, and a link to a file is left out like any entry that is
+    not a regular file. Carried as its target's content, a `CLAUDE.md -> README.md` link
+    made a three-file copy of a tree the plain agent copies as two, and the hashes differed.
+    """
     for here, dirs, names in os.walk(root):
         dirs[:] = sorted(d for d in dirs if not skipped(d))
         for name in names:
             if skipped(name):
                 continue
             full = Path(here) / name
-            if full.is_file():
+            if full.is_file() and not full.is_symlink():
                 yield full
 
 
