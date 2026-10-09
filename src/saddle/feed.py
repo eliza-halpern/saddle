@@ -1119,9 +1119,15 @@ class AuditFeed:
         block prints as "- none recorded". Audits that scored no mutant do not
         count, so a finish refused at tier 0 -- which never reaches mutation --
         cannot erase the record an earlier audit made.
+
+        The record must be of the tree the run commits, which is the tree of the newest
+        audit that names one (a blocked audit names none). A record scored on an earlier
+        tree is not this commit's: when the final tree's mutation run decided nothing,
+        the block says "- none recorded" rather than carry another tree's verdicts.
         """
+        final = next((result.tree for result in reversed(self.results) if result.tree), None)
         for result in reversed(self.results):
-            if result.mutant_detail:
+            if result.mutant_detail and result.tree == final:
                 return tuple((name, status) for name, status, _, _ in result.mutant_detail)
         return ()
 

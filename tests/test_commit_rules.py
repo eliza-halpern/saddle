@@ -34,7 +34,7 @@ from test_auto import Scripted, call, git
 
 from saddle.anchor import COAUTHOR_TRAILER, LEDGER_TRAILER, OUTCOME_TRAILER
 from saddle.auditor import Finding, Findings
-from saddle.auto import AutoOptions, AutoResult, commit_block, run_auto
+from saddle.auto import RULES_UNREAD, AutoOptions, AutoResult, commit_block, run_auto
 from saddle.evidence import SuiteLimitError, commit_rules
 from saddle.feed import Arm, AuditFeed, AuditResult
 from saddle.journal import attempt_sidecar_path, read_spans
@@ -597,3 +597,65 @@ def test_the_ledger_carries_the_block_s_values(calc_repo: Path) -> None:
     assert plain["commit_contract"] == ""
     assert plain["commit_direction"] == ""
     assert plain["commit_mutants"] is None
+
+
+# ---------------------------------------------------------------------------
+# Review of the run (#163): the record is the committed tree's, and an unreadable
+# rule is named.
+# ---------------------------------------------------------------------------
+
+
+def test_a_record_scored_on_an_earlier_tree_is_not_the_commits(tmp_path: Path) -> None:
+    """Known-bad: the final audit (tree B) decided no mutant, as a mutation run that
+    times out does, and the only record was scored on tree A. Committing A's verdicts
+    for B would state a result nobody measured; the block says none recorded."""
+    on_a = AuditResult(
+        point="check",
+        tree="tree-a",
+        findings=(),
+        mutant_detail=(("n.py:1:x", "killed", "show", ("tests/test_n.py::t",)),),
+    )
+    feed = _feed(tmp_path)
+    feed.results = [on_a, AuditResult(point="finish", tree="tree-b", findings=())]
+    assert feed.committed_mutants() == ()
+    # Known-good: the newest record of the committed tree is kept, an older tree's
+    # record after it notwithstanding, and a blocked audit (no tree) decides nothing.
+    on_b = AuditResult(
+        point="finish",
+        tree="tree-b",
+        findings=(),
+        mutant_detail=(("n.py:2:y", "survived", "show", ()),),
+    )
+    for results in (
+        [on_b, on_a, AuditResult(point="finish", tree="tree-b", findings=())],
+        [on_b, AuditResult(point="finish", tree="", findings=())],
+    ):
+        feed.results = results
+        assert feed.committed_mutants() == (("n.py:2:y", "survived"),)
+
+
+@pytest.mark.parametrize("written", ['commit-rules = "true"', "commit-rules = 1"])
+def test_a_value_that_is_not_a_boolean_is_named_in_the_commit_and_adds_no_block(
+    calc_repo: Path, written: str
+) -> None:
+    """Known-bad: a value typo is read by nothing but the commit rules, so a run that
+    dropped it silently would commit as though the project stated no rules. The block
+    stays out, and the commit says why."""
+    _state_rules(calc_repo, written)
+    result = _run(
+        calc_repo,
+        "E+A",
+        {"summary": "fixed add", "contract": CONTRACT_SENTENCE, "direction": "tightened"},
+    )
+    message = _message(result)
+    assert MUTANTS_LABEL not in message
+    assert message.splitlines()[2:4] == ["Narrative (model-written, not evidence):", "fixed add"]
+    line = next(ln for ln in message.splitlines() if ln.startswith(RULES_UNREAD))
+    assert "commit-rules = " in line
+    assert "is not `true` or `false`" in line
+
+
+def test_a_tree_without_the_key_names_no_unread_rules(calc_repo: Path) -> None:
+    """Known-good: no key is no rules, said by nothing."""
+    result = _run(calc_repo, "E+A", {"summary": "fixed add"})
+    assert RULES_UNREAD not in _message(result)

@@ -600,6 +600,11 @@ MUTANTS_LINE: Final = "Mutants (from the run's mutation record):"
 NO_MUTANTS: Final = "- none recorded"
 """The Mutants block's only content when the run has no mutation record: the
 block is there, and it says there is nothing in it."""
+RULES_UNREAD: Final = "Commit rules not applied: "
+"""Opens the line a run's commit carries when the starting commit's `[tool.saddle]`
+could not be read for its commit rules (`evidence.commit_rules` raised): the message
+is otherwise today's, and this line names why, so a typo such as
+`commit-rules = "true"` is never read silently as "no rules"."""
 
 
 def commit_block(contract: str, direction: str, mutants: Sequence[tuple[str, str]]) -> str:
@@ -1057,12 +1062,14 @@ def run_auto(
     # table's other keys: what the model later writes into the file gives its own run
     # no commit format. A table the run cannot read (no file, broken TOML, a value
     # that is neither `true` nor `false`) leaves the message as it is today, the way
-    # an unreadable `sandbox-expose` leaves the exposure as it is today; the audit of a
-    # watched run names the file it could not read, and says so in the packet.
+    # an unreadable `sandbox-expose` leaves the exposure as it is today. The commit names
+    # what could not be read (`RULES_UNREAD`): nothing else would, since the audit's own
+    # readers of the table check its keys and never this key's value.
+    unread = ""
     try:
         rules = commit_rules(worktree, base_commit)
-    except SuiteLimitError:
-        rules = False
+    except SuiteLimitError as exc:
+        rules, unread = False, str(exc)
     notes = local_instructions(repo_root(repo))
     start = build_span(
         node_id="chat#1",
@@ -1351,6 +1358,8 @@ def run_auto(
             "\n\nFiles the model saved for the person (not proof, not committed), "
             f"kept in {where}: {', '.join(kept)}"
         )
+    if unread:
+        message += f"\n\n{RULES_UNREAD}{unread}"
     # The anchor: the outcome span's hash, outside the ledger, as the last paragraph.
     ledger = journal.relative_to(root).as_posix()
     message += f"\n\n{anchor_trailers(outcome_hash(journal, start.span_id), ledger)}"
