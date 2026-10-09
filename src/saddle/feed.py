@@ -1108,6 +1108,29 @@ class AuditFeed:
             if f.verdict == "question"
         ]
 
+    def committed_mutants(self) -> tuple[tuple[str, str], ...]:
+        """Every mutant the run's last audit that scored any scored, as that
+        record names them: `(name, status)` in the record's order.
+
+        `auto` writes this into the Mutants block of a run's commit, so the block
+        is the record's account and not the model's: a mutant the model names in
+        its finish summary that no audit scored is not in it, and a run whose
+        audits scored nothing (arm E has no audits at all) has `()`, which the
+        block prints as "- none recorded". Audits that scored no mutant do not
+        count, so a finish refused at tier 0 -- which never reaches mutation --
+        cannot erase the record an earlier audit made.
+
+        The record must be of the tree the run commits, which is the tree of the newest
+        audit that names one (a blocked audit names none). A record scored on an earlier
+        tree is not this commit's: when the final tree's mutation run decided nothing,
+        the block says "- none recorded" rather than carry another tree's verdicts.
+        """
+        final = next((result.tree for result in reversed(self.results) if result.tree), None)
+        for result in reversed(self.results):
+            if result.mutant_detail and result.tree == final:
+                return tuple((name, status) for name, status, _, _ in result.mutant_detail)
+        return ()
+
     def unresolved(self) -> list[dict[str, object]]:
         """The last audit's failing findings as (gate, reason, cites), sorted.
 

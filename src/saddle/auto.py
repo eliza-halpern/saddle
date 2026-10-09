@@ -46,6 +46,8 @@ from saddle.capabilities import CapabilityError
 from saddle.capabilities import load as load_switches
 from saddle.dag import MutationSample
 from saddle.engine import (
+    COMMIT_DIRECTIONS,
+    COMMIT_UNDETERMINED,
     DEFAULT_FINISH_REFUSAL_CAP,
     NO_LIMIT,
     AutoRun,
@@ -57,6 +59,7 @@ from saddle.events import Event, Question
 from saddle.evidence import (
     RUFF_TIMEOUT_S,
     SuiteLimitError,
+    commit_rules,
     format_overrides,
     gate_checks,
     ruff_argv,
@@ -592,6 +595,43 @@ GUARDED_PATHS: Final = frozenset(
 """Paths a run on saddle's own source may change but not finish on: the
 guarded modules and their tests. Named files, never a pattern."""
 
+CONTRACT_LINE: Final = "Contract (as the model states it): "
+DIRECTION_LINE: Final = "Direction (as the model states it): "
+MUTANTS_LINE: Final = "Mutants (from the run's mutation record):"
+NO_MUTANTS: Final = "- none recorded"
+"""The Mutants block's only content when the run has no mutation record: the
+block is there, and it says there is nothing in it."""
+RULES_UNREAD: Final = "Commit rules not applied: "
+"""Opens the line a run's commit carries when the starting commit's `[tool.saddle]`
+could not be read for its commit rules (`evidence.commit_rules` raised): the message
+is otherwise today's, and this line names why, so a typo such as
+`commit-rules = "true"` is never read silently as "no rules"."""
+
+
+def commit_block(contract: str, direction: str, mutants: Sequence[tuple[str, str]]) -> str:
+    """The block a run's commit carries when the project states its commit rules.
+
+    Three fields, in CONTRIBUTING.md's order: the contract sentence and the
+    direction of any contract change, both the model's own statement, and one
+    `- ` line per mutant of the final audit's mutation record, in the record's
+    order, with the status that record gives. Nothing here comes from the
+    model's account: a mutant it names in its summary or its contract that is
+    not in the record never appears, and a field the run cannot determine is
+    written as `undetermined` rather than guessed.
+    """
+    said = contract.strip() or COMMIT_UNDETERMINED
+    stated = direction.strip()
+    direction_said = stated if stated in COMMIT_DIRECTIONS else COMMIT_UNDETERMINED
+    lines = [
+        f"{CONTRACT_LINE}{said}",
+        f"{DIRECTION_LINE}{direction_said}",
+        MUTANTS_LINE,
+        *(f"- {name}: {status}" for name, status in mutants),
+    ]
+    if not mutants:
+        lines.append(NO_MUTANTS)
+    return "\n".join(lines)
+
 
 class AutoError(RuntimeError):
     """The run could not be set up (not a git repo, worktree failed)."""
@@ -1026,6 +1066,19 @@ def run_auto(
         _git(worktree, "apply", str(options.resume_patch.resolve()))
     root = worktree.parent.parent.parent
     journal = ledger_path(root, run_id)
+    # The project states its commit rules in `[tool.saddle] commit-rules` of the
+    # `pyproject.toml` committed at the commit the run starts from, read like that
+    # table's other keys: what the model later writes into the file gives its own run
+    # no commit format. A table the run cannot read (no file, broken TOML, a value
+    # that is neither `true` nor `false`) leaves the message as it is today, the way
+    # an unreadable `sandbox-expose` leaves the exposure as it is today. The commit names
+    # what could not be read (`RULES_UNREAD`): nothing else would, since the audit's own
+    # readers of the table check its keys and never this key's value.
+    unread = ""
+    try:
+        rules = commit_rules(worktree, base_commit)
+    except SuiteLimitError as exc:
+        rules, unread = False, str(exc)
     notes = local_instructions(repo_root(repo))
     start = build_span(
         node_id="chat#1",
@@ -1131,6 +1184,7 @@ def run_auto(
         summary_return=options.arm == "E+A+F",
         feed=feed,
         tell_summary=feed.tell_summary if feed is not None else None,
+        commit_mutants=feed.committed_mutants if feed is not None else None,
         require_premise=options.premise_check,
         stall_check=options.stall_check,
         guard=guard,
@@ -1313,6 +1367,13 @@ def run_auto(
             extraction.shutdown(wait=True)
     _git(worktree, "add", "-A", "--", *UNSTAGED)
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
+    if rules:
+        # CONTRIBUTING.md asks every commit on this tree for a contract sentence, the
+        # direction of any contract change, and the mutants with their verdicts. The run
+        # states the first two and takes the third from its audits, so the message a run
+        # leaves needs no editing before it can merge.
+        recorded = auto.commit_mutants() if auto.commit_mutants is not None else ()
+        message += f"\n\n{commit_block(auto.contract, auto.direction, recorded)}"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"
     if kept:
@@ -1321,6 +1382,8 @@ def run_auto(
             "\n\nFiles the model saved for the person (not proof, not committed), "
             f"kept in {where}: {', '.join(kept)}"
         )
+    if unread:
+        message += f"\n\n{RULES_UNREAD}{unread}"
     # The anchor: the outcome span's hash, outside the ledger, as the last paragraph.
     ledger = journal.relative_to(root).as_posix()
     message += f"\n\n{anchor_trailers(outcome_hash(journal, start.span_id), ledger)}"

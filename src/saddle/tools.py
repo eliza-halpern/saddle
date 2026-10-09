@@ -735,13 +735,43 @@ touching the tree, and it is offered only when a run is autonomous. What
 the model writes in it is sealed labelled as narrative, never evidence --
 the page's "its narrative can't assert a result"."""
 
+FINISH_CONTRACT: Final = "contract"
+FINISH_DIRECTION: Final = "direction"
+"""The two optional strings `finish` can carry beside its summary, for a project
+that states its commit rules (`evidence.commit_rules`): the change's contract as
+one sentence, and the direction of any contract change. Both are the model's
+statement and `engine._finish` records them as given; the run's commit block is
+where a missing one becomes `engine.COMMIT_UNDETERMINED`."""
+
 FINISH_SCHEMA: Final[dict[str, Any]] = _tool(
     FINISH_TOOL,
     "Finish the task. Call this once, when you are done, with a short account "
     "of what you changed and why. The account is kept as your narrative; it is "
     "not treated as proof that anything works. Call it only when the task is "
-    "done, as it says so; if you cannot do the task, call `blocked` instead.",
-    {"summary": {"type": "string"}},
+    "done, as it says so; if you cannot do the task, call `blocked` instead. "
+    "Where the project states its commit rules, its run commit carries this "
+    "change's contract and direction beside the mutants of the audit's mutation "
+    "record: say them with your summary, as `contract` and `direction`; one you "
+    "leave out is written as undetermined, never guessed.",
+    {
+        "summary": {"type": "string"},
+        FINISH_CONTRACT: {
+            "type": "string",
+            "description": (
+                "This change's contract as one sentence, in your own words: your "
+                "statement, not a proof. Your words, or `undetermined` where you "
+                "give none."
+            ),
+        },
+        FINISH_DIRECTION: {
+            "type": "string",
+            "description": (
+                "The direction of any contract change, one of `tightened`, "
+                "`loosened` or `scope narrowed`. Any other value, or none, is "
+                "written as `undetermined`."
+            ),
+        },
+    },
     ["summary"],
 )
 
