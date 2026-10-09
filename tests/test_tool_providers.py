@@ -47,7 +47,7 @@ def _schema(name: str) -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": name,
-            "description": "search the research library",
+            "description": "search a set of documents",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -57,7 +57,7 @@ def _schema(name: str) -> dict[str, Any]:
     }
 
 
-def _provider(name: str = "library_search") -> ToolProvider:
+def _provider(name: str = "doc_search") -> ToolProvider:
     def handler(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return f"library says: {args['query']}"
 
@@ -94,11 +94,11 @@ def test_a_provider_adds_a_tool_a_run_can_call(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _install(monkeypatch, _provider())
-    assert [p.name for p in tool_providers()] == ["library_search"]
-    assert provider_schemas()[0]["function"]["name"] == "library_search"
-    assert "library_search" in provider_prompt()
+    assert [p.name for p in tool_providers()] == ["doc_search"]
+    assert provider_schemas()[0]["function"]["name"] == "doc_search"
+    assert "doc_search" in provider_prompt()
     out = execute_tool(
-        ToolCall(id="1", name="library_search", arguments='{"query": "diff grammar"}'),
+        ToolCall(id="1", name="doc_search", arguments='{"query": "diff grammar"}'),
         workdir=tmp_path,
     )
     assert out == "library says: diff grammar"
@@ -109,7 +109,7 @@ def test_a_provider_tools_arguments_are_validated(
 ) -> None:
     _install(monkeypatch, _provider())
     out = execute_tool(
-        ToolCall(id="2", name="library_search", arguments='{"nope": 1}'),
+        ToolCall(id="2", name="doc_search", arguments='{"nope": 1}'),
         workdir=tmp_path,
     )
     assert "does not take nope" in out

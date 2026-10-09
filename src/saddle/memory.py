@@ -67,7 +67,7 @@ REASONING_KEPT: Final = 4
 """How many of the newest assistant messages keep their reasoning through a
 compaction (stage 0). Keeping the latest reasoning scores as keeping all of it,
 and dropping all of it costs more rounds and wall time (saddle's keep-reasoning
-A/B; research library, "Reasoning retention in agent context")."""
+A/B; arXiv:2609.29875, Table 16)."""
 
 REASONING_LINE: Final = (
     "Reasoning from earlier rounds was cleared to fit the window; the newest "
