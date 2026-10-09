@@ -2431,6 +2431,15 @@ def build_parser() -> argparse.ArgumentParser:
         "reasoning` prints it). Narrative: nothing that judges the run reads it.",
     )
     auto.add_argument(
+        "--plan",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Offer the model a plan tool whose items are kept word for word and shown "
+        "after every compaction, remind it once of steps a reply lists that its plan "
+        "does not hold, and name items still open at the end (on by default; --no-plan "
+        "offers none).",
+    )
+    auto.add_argument(
         "--finish-refusal-cap",
         type=int,
         default=DEFAULT_FINISH_REFUSAL_CAP,
@@ -2524,6 +2533,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         resume_tmp=args.resume_tmp,
         keep_reasoning=args.keep_reasoning,
         save_reasoning=args.save_reasoning,
+        plan=args.plan,
         check_tool=args.check_tool,
         wheels=wheel_folder(args),
         tier2=args.tier2,

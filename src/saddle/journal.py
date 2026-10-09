@@ -647,6 +647,12 @@ a tree the run no longer holds sits in the sealed chain. Not `auto:`-prefixed, a
 run's start, spend or outcome. Not a tool span either: the run copies its own tree, the
 model never asks for it, and a copy taken as the run ends would fail the chain's rule
 that no tool span follows the outcome."""
+PLAN_REMINDER_SPAN: Final = "plan:reminder"
+"""The span an autonomous run seals each time the model is reminded that a reply
+listed steps its plan does not hold (`engine._remind`, `plan.Plan.reminder`):
+argv[1] is the run's count of reminders so far, detail the reminder as the model
+read it. An agent span like `compaction`: the harness says it, the model never
+calls it, so the chain does not hold it to the outcome's tool list."""
 AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped", "auto:unchanged")
 """A run's outcome span names (`engine._seal_outcome`); `auto:unchanged` is
 the third ending (finish on a tree equal to the baseline). Not `auto:spend`,

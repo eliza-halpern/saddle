@@ -38,7 +38,9 @@ The note is a *user* message, never a second system message: the served
 Qwen3.8 template raises "System message must be at the beginning." on a
 system message after index 0. An autonomous run's note also carries a
 state block rebuilt from the run's own records at every compaction
-(`run_state`); the note is replaced, never compacted itself.
+(`run_state`); the note is replaced, never compacted itself. An autonomous run
+gets a note after every compaction, one that dropped nothing included, so its
+state block (and the plan in it) is always in view after one.
 """
 
 from __future__ import annotations
@@ -283,6 +285,7 @@ def is_test_command(command: str) -> bool:
 
 def run_state(
     *,
+    plan: str = "",
     files: Sequence[str],
     test: tuple[str, str] | None,
     audit: str,
@@ -305,9 +308,15 @@ def run_state(
     file edited and then put back is not listed. `test` is the newest test
     command and its result. `audit` is the newest audit text the model was
     *delivered*; an audit withheld from it (arm E+A) is never passed here.
+
+    `plan` is the plan's section (`plan.Plan.section`): the one part of the block
+    the model wrote, item by item through its `plan` tool, and shown as written.
+    "" (no plan kept) leaves the block as it was.
     """
     lines = ["Run state, rebuilt from the run's records (not model-written):"]
     lines.append("- task: the first user message above, kept word for word")
+    if plan:
+        lines.append(plan)
     lines.append("- files changed since the run's starting commit: " + (", ".join(files) or "none"))
     if test is None:
         lines.append("- last test run: none yet")
@@ -552,9 +561,15 @@ def compact(
         return [e for e in dict.fromkeys(prior + shown) if _entry_path(e) not in held]
 
     def renote(summary: str) -> tuple[int, str]:
-        if old is not None and state is not None:
+        # An autonomous run gets a note after every compaction, one that dropped
+        # nothing included: its state block holds the run's plan, and the model is
+        # told its earlier reasoning was cleared (#209). Three of one run's first
+        # compactions cleared reasoning alone and, with no note yet, said nothing.
+        if state is not None and old is not None:
             count, topics = _previous(messages[old])
             messages[old] = _note(count, topics, [], unread(), block, hint, reasoned)
+        elif state is not None:
+            messages.insert(max(keep, 0) + 1, _note(0, [], [], unread(), block, hint, reasoned))
         return 0, summary
 
     # Stage 0: old reasoning goes first, whole to `archive`, before any tool
@@ -656,7 +671,7 @@ def compact(
                 message["content"] = _truncate_result(content)
 
     if not dropped and old is None:
-        return 0, elided
+        return renote(elided)
 
     summary = f"{dropped} earlier message(s) compacted"
     if fresh:

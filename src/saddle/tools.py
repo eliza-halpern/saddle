@@ -872,6 +872,30 @@ BLOCKED_SCHEMA: Final[dict[str, Any]] = _tool(
     ["reason", "tried"],
 )
 
+PLAN_TOOL: Final = "plan"
+"""The worker's plan, kept by the harness item by item (`plan.Plan`, #209).
+
+Like `finish`, the engine handles it: the plan belongs to the run, not to the
+tree, and it is offered only when a run is autonomous and its plan is on."""
+
+PLAN_SCHEMA: Final[dict[str, Any]] = _tool(
+    PLAN_TOOL,
+    "Keep your plan: the steps you will take, held word for word outside the "
+    "conversation, so a compaction cannot lose them. action add stores each of items "
+    "(one step per item) under the next id, P1, P2, ...; action done closes the items "
+    "in ids, with why saying what shows each is done (a test name, a command); action "
+    "drop closes them, with why saying why each will not be done; action show lists "
+    "the plan. Nothing else removes an item: adding a shorter list later leaves the "
+    "earlier items open. Every call returns the open items.",
+    {
+        "action": {"type": "string", "enum": ["add", "done", "drop", "show"]},
+        "items": {"type": "array", "items": {"type": "string"}},
+        "ids": {"type": "array", "items": {"type": "string"}},
+        "why": {"type": "string"},
+    },
+    ["action"],
+)
+
 PREMISE_TOOL: Final = "premise_check"
 """`saddle auto --premise-check`: before its first edit the model shows the
 problem the task describes (`engine._premise`). Saddle reruns the commands and

@@ -23,6 +23,7 @@ from saddle.journal import (
     FEED_QUESTION_LINE,
     JOURNAL_QUESTION_EXIT,
     P1_EXTRACT_SPAN,
+    PLAN_REMINDER_SPAN,
     JournalEntry,
     PlanRecord,
     ProofRecord,
@@ -565,6 +566,11 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
             f"audit {gate} {'passed' if ok else 'failed'} · {_first_line(entry.detail)}",
             "audit" if ok else "fail",
             cite,
+        )
+    if name == PLAN_REMINDER_SPAN:
+        quoted = sum(line.startswith('- "') for line in entry.detail.splitlines())
+        return SessionLine(
+            "·", f"reminded of {quoted} listed step(s) not in its plan", "info", cite
         )
     if name == "question":
         return SessionLine("?", f"asked you · {_first_line(entry.detail)}", "ask", cite)

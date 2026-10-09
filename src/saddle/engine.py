@@ -52,6 +52,7 @@ from saddle.journal import (
     COMPACTION_SPAN,
     GUARDED_STOP_PREFIX,
     MAX_THINKING_CHARS,
+    PLAN_REMINDER_SPAN,
     PREMISE_DISPUTED_STOP,
     REFUSED_STOP,
     STALL_STOP,
@@ -77,6 +78,7 @@ from saddle.memory import (
     stale_copy,
     trim_screenshots,
 )
+from saddle.plan import Plan
 from saddle.recall import Recall
 from saddle.sandbox import Terminal
 from saddle.snapshots import Snapshots
@@ -90,6 +92,7 @@ from saddle.tools import (
     FINISH_DIRECTION,
     FINISH_TOOL,
     INSTALL_TOOL,
+    PLAN_TOOL,
     PREMISE_TOOL,
     REFUSE_TOOL,
     REFUSED,
@@ -490,6 +493,16 @@ FINISH_QUESTION: Final = (
 )
 """`finish`'s result when the finish audit accepted the tree with a `question`."""
 
+PLAN_OPEN: Final = (
+    "finish returned, not refused: your plan has {n} open item(s).\n{items}\n"
+    "Close each with plan, action done and what shows it or action drop and why, then "
+    "call finish again. This is asked once: the next finish is not returned for it, "
+    "and any item still open is named in the run's record."
+)
+"""`finish`'s result, once per run, when the plan has open items (#209). Not a
+refusal: no audit ran, nothing is counted against the run, and the next `finish`
+goes on whatever the plan holds."""
+
 QUESTION_REASON_CHARS: Final = 300
 """How much of the questions the stop reason carries; the audit sidecar keeps them whole."""
 
@@ -635,6 +648,12 @@ class AutoRun:
     `installs.plan`, put to the user as a question every time, and carried
     out only on Install (`_install`). None: the tool is not offered, and a
     call to it is an unknown tool."""
+    plan: Plan | None = None
+    """The worker's plan (`plan.Plan`, #209): a `plan` call changes it, every
+    compaction's state block lists its open items, a reply that lists steps it does
+    not hold is answered once with them (`_remind`), a `finish` while items are open
+    is answered once with those (`PLAN_OPEN`), and the outcome seals it. None
+    (`--no-plan`): no tool is offered, and a call to it is an unknown tool."""
     require_premise: bool = False
     """`--premise-check`: edits are refused until `premise_check` ran (`_premise`)."""
     premise: dict[str, Any] | None = None
@@ -1320,6 +1339,9 @@ def run_turn(
                         yield AuditNote(text=heard)
                         nudge = f"{nudge}\n\n{heard}"
                         auto.delivered_audit = heard
+                    reminder = _remind(auto, options.journal, node_id, reasoning, reply)
+                    if reminder:
+                        nudge = f"{nudge}\n\n{reminder}"
                     messages.append({"role": "user", "content": nudge})
                     continue
                 if auto is None and not reply.strip() and not stop():
@@ -1404,6 +1426,8 @@ def run_turn(
                     and _starts_whole_suite(call.arguments)
                 ):
                     result = WHOLE_SUITE_BY_CHECK
+                elif auto is not None and auto.plan is not None and call.name == PLAN_TOOL:
+                    result = auto.plan.apply(call.arguments)
                 elif auto is not None and call.name == DISPUTE_TOOL:
                     result = _dispute(auto, call.arguments, options.workdir, ctx)
                 elif auto is not None and call.name == REFUSE_TOOL:
@@ -1476,6 +1500,13 @@ def run_turn(
                     seen += yield from _consult(auto, options.journal, node_id, call, seen)
                 tools.append({"name": call.name, "arguments": call.arguments, "result": seen})
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": seen})
+            if auto is not None and tools and not auto.outcome:
+                reminder = _remind(auto, options.journal, node_id, reasoning, reply)
+                if reminder:
+                    # On the round's last result, which the model reads next.
+                    last = next(m for m in reversed(messages) if m.get("role") == "tool")
+                    last["content"] = f"{last['content']}\n\n{reminder}"
+                    tools[-1]["result"] = f"{tools[-1]['result']}\n\n{reminder}"
             if ctx.attachments:
                 messages.append(images_message(ctx.attachments))
                 ctx.attachments.clear()
@@ -1624,6 +1655,7 @@ def _compact(
 
 def _run_state(auto: AutoRun) -> str:
     return run_state(
+        plan=auto.plan.section() if auto.plan is not None else "",
         files=auto.changed_files(),
         test=auto.last_test,
         audit=auto.delivered_audit,
@@ -1632,6 +1664,30 @@ def _run_state(auto: AutoRun) -> str:
         elapsed_s=auto.budget.elapsed(),
         time_budget_s=auto.budget.time_s,
     )
+
+
+def _remind(auto: AutoRun, journal: Path, node_id: str, reasoning: str, reply: str) -> str:
+    """This round's plan reminder (`plan.Plan.reminder`), sealed as a
+    `plan:reminder` span; "" when there is none or the run keeps no plan."""
+    if auto.plan is None:
+        return ""
+    told = auto.plan.reminder(reasoning, reply)
+    if told is None:
+        return ""
+    append_span(
+        journal,
+        build_span(
+            node_id=node_id,
+            argv=[PLAN_REMINDER_SPAN, str(auto.plan.reminders)],
+            duration_ms=0,
+            exit_code=0,
+            detail=told,
+            kind="agent",
+            name=PLAN_REMINDER_SPAN,
+            parent_id=auto.run_span,
+        ),
+    )
+    return told
 
 
 def _note_round(auto: AutoRun, call: ToolCall, result: str) -> None:
@@ -2061,6 +2117,11 @@ def _finish(auto: AutoRun, arguments: str) -> str:
         return "error: finish needs a string summary argument"
     auto.contract = _finish_said(args, FINISH_CONTRACT)
     auto.direction = _finish_said(args, FINISH_DIRECTION)
+    opened = auto.plan.open_items() if auto.plan is not None else []
+    if auto.plan is not None and opened and not auto.plan.finish_told:
+        auto.plan.finish_told = True
+        items = "\n".join(f"{item.id}: {item.text}" for item in opened)
+        return PLAN_OPEN.format(n=len(opened), items=items)
     if auto.summary_return and auto.summary_returned is None and auto.summary_names is not None:
         try:
             missing = auto.summary_names(summary)
@@ -2335,6 +2396,9 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
     if auto.reason == AUDIT_UNRESOLVED:
         named = ", ".join(f"{f['gate']} ({f['reason']})" for f in auto.unresolved)
         detail += f"; unresolved findings: {named}"
+    opened = auto.plan.open_items() if auto.plan is not None else []
+    if opened:
+        detail += f"; open plan items: {', '.join(item.id for item in opened)}"
     took = int(auto.budget.elapsed() * 1000)
     # The run's span of wall time: it began `took` before now and ends as it is
     # sealed, so a reader has when the run finished (`transcript`).
@@ -2419,6 +2483,11 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
     if auto.check_tool and auto.feed is not None:
         # Only with the flag, so a run without it seals the same keys as before.
         evidence["checks"] = len(auto.feed.checks)
+    if auto.plan is not None:
+        # Every item, open and closed, and how often the run was reminded; a run
+        # with its plan off (`--no-plan`) seals the same keys as before.
+        evidence["plan"] = auto.plan.record()
+        evidence["plan_reminders"] = auto.plan.reminders
     digest = write_attempt_sidecar(journal, span.span_id, evidence)
     span = build_span(
         node_id=node_id,

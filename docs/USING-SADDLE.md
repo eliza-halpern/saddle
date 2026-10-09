@@ -674,6 +674,17 @@ Defaults below are read from `cli.build_parser`; CLI.md lists every flag.
   4000 characters of a whole run's reasoning, so one 80-minute run kept about 1% of
   it. `saddle reasoning .saddle/runs/<id>/proofs.jsonl` prints the rounds in order.
   Narrative: no gate, audit or verdict reads it.
+- `--plan` (on by default; `--no-plan` turns it off): offers the model a `plan` tool.
+  Each step it adds is kept word for word under an id (P1, P2, ...), outside the
+  conversation, and closes only with `done` (and what shows it) or `drop` (and why):
+  no call replaces the list, so restating a plan cannot lose a step. After every
+  compaction the state block lists the open items. A reply that lists steps the plan
+  does not hold (a "Tests to add:" list, numbered steps that add, write or fix
+  something) gets one reminder quoting them. A `finish` while items are open is
+  answered once with them; the next `finish` is taken as usual, and any item still
+  open is named in the outcome and the commit message. In one traced run the worker
+  planned a fixture in its reasoning, left it out when it restated the plan, and a
+  compaction then cleared the reasoning that held it; the case was never tested.
 - `--check-tool` / `--no-check-tool` (on by default in arm E+A+F; off, and refused if
   asked for, in E and E+A): offers the model a `check` tool that runs audit tiers 0 and 1
   on the current tree before `finish`, so it need not run the whole suite itself to learn

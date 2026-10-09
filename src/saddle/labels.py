@@ -119,6 +119,34 @@ def _screen_labels(name: str, args: dict[str, Any]) -> tuple[str, str, str]:
     return f"{present} {what}", f"{past} {what}", f"Failed to {stem} {what}"
 
 
+def _plan_labels(args: dict[str, Any]) -> tuple[str, str, str]:
+    """`plan` calls name what they do to the plan: steps added, items closed."""
+    items, ids = args.get("items"), args.get("ids")
+    count = 1 if isinstance(items, str) else len(items) if isinstance(items, list) else 0
+    named = ", ".join(str(i) for i in ids) if isinstance(ids, list) else str(ids or "")
+    action = args.get("action")
+    if action == "add":
+        steps = f"{count} step{'' if count == 1 else 's'}"
+        return (
+            f"Adding {steps} to the plan",
+            f"Added {steps} to the plan",
+            "Failed to add to the plan",
+        )
+    if action == "done":
+        what = _clip(named) or "items"
+        return f"Closing {what} as done", f"Closed {what} as done", f"Failed to close {what}"
+    if action == "drop":
+        what = _clip(named) or "items"
+        return (
+            f"Dropping {what} from the plan",
+            f"Dropped {what} from the plan",
+            f"Failed to drop {what}",
+        )
+    if action == "show":
+        return "Reading the plan", "Read the plan", "Failed to read the plan"
+    return "Updating the plan", "Updated the plan", "Failed to update the plan"
+
+
 def describe(name: str, arguments: str) -> tuple[str, str, str]:
     """(present, past, failed) labels for one call.
 
@@ -134,6 +162,8 @@ def describe(name: str, arguments: str) -> tuple[str, str, str]:
         parsed = {}
     if name in ("screenshot", "computer"):
         return _screen_labels(name, parsed)
+    if name == "plan":
+        return _plan_labels(parsed)
     present_verb, past_verb = _TENSES.get(name, (f"Calling {name}", f"Called {name}"))
     obj = _clip(_object_of(name, parsed))
     if not obj:

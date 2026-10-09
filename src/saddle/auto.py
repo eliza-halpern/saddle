@@ -88,6 +88,7 @@ from saddle.jsevidence import (
     stryker_entry,
     stryker_invocation,
 )
+from saddle.plan import Plan
 from saddle.recall import Recall
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.snapshots import SNAPSHOT_DIR, Snapshots
@@ -101,6 +102,7 @@ from saddle.tools import (
     DISPUTE_SCHEMA,
     FINISH_SCHEMA,
     INSTALL_SCHEMA,
+    PLAN_SCHEMA,
     PREMISE_SCHEMA,
     REFUSE_SCHEMA,
     TOOLS,
@@ -180,6 +182,20 @@ STALL_PROMPT: Final = (
 )
 """Appended to the system prompt with `--stall-check`, so the eject is a stated
 rule the model can satisfy (act, or dispute), not a silent trap."""
+
+PLAN_PROMPT: Final = (
+    " Keep a plan with the plan tool. When you settle on steps you will take -- tests "
+    "to write, cases to cover, changes to make -- add each one as an item; when one is "
+    "done, close it with done and what shows it (a test name, a command), or with drop "
+    "and why. Items are kept word for word outside the conversation: after a "
+    "compaction, when your earlier reasoning is cleared, your open items are in the "
+    "run state. If a reply of yours lists steps your plan does not hold, the next tool "
+    "result quotes them once, so you can add the ones you mean. A finish while items "
+    "are open is answered once with them; you may then finish with items open, and "
+    "they are named in the run's record."
+)
+"""Appended to the system prompt while the run keeps a plan (the default; off with
+`--no-plan`): every check the plan makes is stated here, and none refuses (#209)."""
 
 EVIDENCE_DIR: Final = "evidence"
 """The folder under a run's /tmp that outlives the run: `keep_evidence` copies it
@@ -699,6 +715,10 @@ class AutoOptions:
     save_reasoning: bool = True
     """`--save-reasoning` (on): seal each round's whole reasoning beside its spend
     record (`engine.AutoRun.save_reasoning`, #126); `saddle reasoning` prints it."""
+    plan: bool = True
+    """`--plan` (on): offer the `plan` tool and keep the worker's plan
+    (`engine.AutoRun.plan`, #209). `--no-plan` offers no tool, says nothing of a
+    plan in the prompt, and is sealed as `plan_tool: false`."""
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten (T5 rule 8). A failing
     assertion-preservation finding naming only these is classed `sanctioned`:
@@ -1181,6 +1201,7 @@ def run_auto(
         ),
         summary_names=lambda text: absent_code_names(text, worktree, base_commit),
         save_reasoning=options.save_reasoning,
+        plan=Plan() if options.plan else None,
         summary_return=options.arm == "E+A+F",
         feed=feed,
         tell_summary=feed.tell_summary if feed is not None else None,
@@ -1202,6 +1223,7 @@ def run_auto(
             **({"self_guard": True} if guard is not None else {}),
             **({"check_tool": True} if check_tool else {}),
             **({"save_reasoning": False} if not options.save_reasoning else {}),
+            **({"plan_tool": False} if not options.plan else {}),
             **(
                 {
                     "task_requirements": str(options.task_requirements)
@@ -1272,6 +1294,7 @@ def run_auto(
                 else None
             ),
         )
+        + (PLAN_PROMPT if options.plan else "")
         + (CHECK_PROMPT if check_tool else "")
         + (PREMISE_PROMPT if options.premise_check else "")
         + (STALL_PROMPT if options.stall_check else "")
@@ -1285,6 +1308,7 @@ def run_auto(
             DISPUTE_SCHEMA,
             REFUSE_SCHEMA,
             BLOCKED_SCHEMA,
+            *([PLAN_SCHEMA] if options.plan else []),
             *([PREMISE_SCHEMA] if options.premise_check else []),
             *([CHECK_SCHEMA] if check_tool else []),
             *([INSTALL_SCHEMA] if options.wheels is not None else []),
@@ -1349,6 +1373,10 @@ def run_auto(
     if options.resume_messages is not None:
         messages = resumed(options.resume_messages, worktree, turn_options.system_prompt or "")
         text = None  # answer what is there: the recorded conversation's next step
+        if auto.plan is not None:
+            # The plan as the recorded conversation left it: its items are in the
+            # messages, and an id the model names must still be found.
+            auto.plan = Plan.from_messages(messages)
     events: Iterator[Event] = run_turn(
         client, messages, text, turn_options, turn=1, context=context, cancel=cancel
     )
@@ -1376,6 +1404,10 @@ def run_auto(
         message += f"\n\n{commit_block(auto.contract, auto.direction, recorded)}"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"
+    opened = auto.plan.open_items() if auto.plan is not None else []
+    if opened:
+        message += "\n\nPlan items still open at the end (neither done nor dropped):\n"
+        message += "\n".join(f"- {item.id}: {item.text}" for item in opened)
     if kept:
         where = (journal.parent / EVIDENCE_DIR).relative_to(root).as_posix()
         message += (
