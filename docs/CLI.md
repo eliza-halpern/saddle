@@ -310,8 +310,8 @@ This command runs one task autonomously in a new worktree. The result is a branc
 |---|---|---|
 | `TASK` | required | what to do, in words |
 | `--repo REPO` | `.` | git repository to work on |
-| `--time-budget S` | `1800` | wall-clock seconds before an honest stop |
-| `--token-budget N` | `100000` | generated tokens before an honest stop (the prompt is not counted) |
+| `--time-budget S` | `0` (no limit) | wall-clock seconds before an honest stop; 0 is no time limit |
+| `--token-budget N` | `0` (no limit) | generated tokens before an honest stop (the prompt is not counted); 0 is no cap |
 | `--allow-test-edits` | off (tests read-only) | let the run edit test files. The normal flag for a task that needs a new or changed test: a terminal run cannot answer the "allow test edits?" question (USING-SADDLE.md §5, item 6), so without the flag its tests stay read-only |
 | `--no-feedback` | | arm E+A: audit and journal, but deliver nothing and never refuse finish |
 | `--no-audit` | | arm E: no auditor at all (mutually exclusive with `--no-feedback`) |
@@ -326,7 +326,7 @@ This command runs one task autonomously in a new worktree. The result is a branc
 | `--wheel-dir DIR` | `$SADDLE_WHEEL_DIR`, else `~/.local/share/saddle/wheels` | with `--allow-installs`: the local folder of wheels installs come from |
 | `--base-url URL` | `$SADDLE_BASE_URL`, else `http://127.0.0.1:18020/v1` | model server (see [Server URL and model](#server-url-and-model)) |
 | `--model ID` | `$SADDLE_MODEL`, else `qwen3.8-27b` | model id |
-| `--temperature T` | `0.0` | sampling temperature |
+| `--temperature T` | `1.0` | sampling temperature: the model's recommended; `0.0` is greedy |
 | `--reasoning-effort` | `medium` | one of `none`, `low`, `medium`, `xhigh` |
 
 With neither `--no-feedback` nor `--no-audit`, the arm is E+A+F: audits are delivered
